@@ -29,9 +29,10 @@ new to sim racing and do not know the tracks yet.
 
 *A sketch of the HUD drawn outside the game. Fonts in the game will differ.*
 
-> **Status (0.3.0): not yet verified inside Assetto Corsa by its author.** The logic is covered by
-> automated tests and the whole app runs against a stand-in for the game, but
-> the first real run is yours. The checklist below takes about fifteen minutes.
+> **Status (0.3.0): early release.** The logic is covered by automated tests
+> and the whole app runs against a stand-in for the game, but it has had very
+> little time in the real one. Expect rough edges, and please report them
+> with the Diagnostics screenshot described below.
 
 ## What you need
 
