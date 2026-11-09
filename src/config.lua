@@ -2,7 +2,7 @@
 -- These are starting values; they are meant to be tuned after real laps.
 
 return {
-  version = '0.2.0',
+  version = '0.3.0',
 
   grid = {
     cellM = 2,          -- target cell length along the track
@@ -55,6 +55,14 @@ return {
     brakeBarM = 200,         -- distance covered by the on-screen countdown bar
     minActiveKmh = 20,       -- below this the co-driver stays quiet
     throttleLowGas = 0.3,    -- "throttle" is only cued if you are below this
+    -- Staying with the driver: the next corner is not called while you are
+    -- still finishing this one or sorting out a mistake...
+    exitHoldM = 15,          -- "finishing" lasts until this far past the corner's end
+    urgentS = 1.5,           -- ...unless braking or turn-in is this close
+    busySlideDeg = 20,       -- sliding more than this counts as being busy
+    busyAfterMistakeS = 1.2, -- quiet time after a lock-up, slide or excursion
+    recoverS = 1.0,          -- back under control for this long: call the corner again
+    reCueS = 0.8,            -- second "brake" if you pass the benchmark's point unbraked
   },
 
   -- Measuring a corner (used for the benchmark's targets and for your pass).

@@ -29,7 +29,7 @@ new to sim racing and do not know the tracks yet.
 
 *A sketch of the HUD drawn outside the game. Fonts in the game will differ.*
 
-> **Status (0.2.0): not yet run inside Assetto Corsa.** The logic is covered by
+> **Status (0.3.0): not yet verified inside Assetto Corsa by its author.** The logic is covered by
 > automated tests and the whole app runs against a stand-in for the game, but
 > the first real run is yours. The checklist below takes about fifteen minutes.
 
@@ -117,6 +117,7 @@ Diagnostics**, and the last lines of
 | "This track has no ideal line" | The track has no AI line (some mod tracks). Lap recording and mistake tips still work; corner callouts cannot. |
 | Brake cue feels far too early (no teacher yet) | Normal at first: the app starts cautious and trusts the car more as it sees you corner and brake harder. A teacher lap fixes this properly. |
 | Brake cue feels too late or too early (with a teacher) | Change "Brake cue earlier by" in Settings. |
+| Corners are called too early or too late | Panel → Settings → "Call corners ... before braking". Lower is later. |
 | No teacher appears | The AI cars must be the same model as yours, and one of them has to finish a clean lap without visiting the pits. Panel → Teacher shows how many cars are being watched. |
 | No line on the track | Panel → Teacher shows the line's status. If it reports an error, send it to me; the rest of the app is unaffected. Meanwhile the game's own "Ideal line" assist is a good substitute. |
 
@@ -125,13 +126,18 @@ Diagnostics**, and the last lines of
 - **Arrow and words**: the next corner, its direction and how sharp it is.
   From sharpest to gentlest: hairpin, tight, medium, fast, kink.
 - **Big number**: distance to where the corner starts.
+- **EXIT**: you are still on the way out of this corner. The co-driver stays
+  with it, shows the next corner as a small preview, and only calls it once
+  you are out. If braking for the next one is very close it speaks anyway.
+- **After a mistake** (a slide, a lock-up, four wheels off) it keeps quiet
+  until you have the car back, then calls the corner ahead again.
 - **Second line**: with a teacher, the gear and the slowest speed to aim for.
 - **Bar**: fills up as you approach the brake point. When the card turns red
   and says **BRAKE**, brake.
 - **Green card saying THROTTLE**: the teacher is already back on the power
   here and you are not.
 - **Card below**: one thing at a time. After a mistake, what happened and
-  why. After a corner, the time lost there and the main cause.
+  why. Just past each corner's exit, the time lost there and the main cause.
 
 Beginner mode (the default) shows only this. Switch it off in Settings to add
 the delta to your best lap and to the teacher, and two pairs of pedal bars:
@@ -178,6 +184,8 @@ Panel → Settings.
 - **Spoken corner callouts**, **Sound at the brake cue**,
   **Beep instead of "brake"**, **Say "throttle"**, **Volume**.
 - **Brake cue earlier by**: extra warning time, 0 to 1 second.
+- **Call corners ... before braking**: how early a corner is announced,
+  2 to 6 seconds.
 - **Driving line on the track**, **Pedal bars on the advanced HUD**.
 - **I use a gamepad**: turns off the steering-smoothness check.
 - **Speeds in mph**.

@@ -484,7 +484,11 @@ test('card reports distance and the corner after next', function()
   near(card.distStartM, track.corners[1].startM, 3)
   eq(card.nextCorner.index, 2)
   card = pilot:update(track.corners[1].apexM / track.lengthM + 0.002, 12, 1 / 60)
-  eq(card.corner.index, 2, 'past the apex the next corner takes over')
+  eq(card.corner.index, 1, 'just past the apex the card stays with the corner being finished')
+  eq(card.phase, 'exit')
+  eq(card.nextCorner.index, 2)
+  card = pilot:update((track.corners[1].endM + 30) / track.lengthM, 12, 1 / 60)
+  eq(card.corner.index, 2, 'past the exit the next corner takes over')
 end)
 
 -- mistakes ------------------------------------------------------------------
@@ -978,6 +982,157 @@ test('chooses the right benchmark', function()
   eq(label, 'you')
   lap, label = Teacher.choose(nil, f, nil)
   eq(label, 'friend')
+end)
+
+-- Staying with the driver ------------------------------------------------------
+
+print('reactive co-driver')
+-- A small track whose corners come in close pairs: 80 m between T1 and T2.
+local closePoints = Synth.line({
+  { 's', 120 }, { 'a', 30, -90 }, { 's', 80 }, { 'a', 30, -90 }, { 's', 240 },
+  { 'a', 30, -90 }, { 's', 80 }, { 'a', 30, -90 }, { 's', 120 },
+}, 414)
+local closeTrack = Track.build(closePoints, { cfg = config.track, leftSign = 1 })
+local closePlan = Track.plan(closeTrack, Grip.new(config.grip), config.grip)
+local closeSamples = Synth.drive(closeTrack, driver({ laps = 3 }))
+
+test('fixture: four corners, two close pairs, not linked', function()
+  eq(#closeTrack.corners, 4)
+  near(closeTrack.corners[1].gapNextM, 80, 8)
+  eq(closeTrack.corners[1].linkNext, false)
+end)
+test('the next corner is not called while the driver is still finishing this one', function()
+  local pilot = Pilot.new(closeTrack, config.pilot)
+  pilot:setPlan(closePlan)
+  local c1 = closeTrack.corners[1]
+  local calledAt, cuedAt, sawExit
+  for _, s in ipairs(closeSamples) do
+    local card, events = pilot:update(s.pos, s.speedMs, s.dt, { gas = s.gas, brake = s.brake })
+    local m = s.pos * closeTrack.lengthM
+    if s.lapCount == 1 then
+      if m > c1.apexM + 4 and m < c1.endM - 2 then
+        eq(card.corner.index, 1, 'card stays on T1 through its exit (at ' .. m .. ' m)')
+        eq(card.phase, 'exit')
+        eq(card.nextCorner.index, 2, 'with T2 as the preview')
+        sawExit = true
+      end
+      for _, ev in ipairs(events) do
+        if ev.kind == 'corner' and ev.corner.index == 2 and not calledAt then calledAt = m end
+        if ev.kind == 'brake' and ev.corner.index == 2 and not cuedAt then cuedAt = m end
+      end
+    end
+  end
+  check(sawExit, 'the exit phase was never seen')
+  check(calledAt, 'T2 must still be called')
+  check(calledAt >= c1.endM, 'T2 called at ' .. calledAt .. ' m, T1 ends at ' .. c1.endM .. ' m')
+  check(calledAt < closeTrack.corners[2].startM, 'and before T2 begins')
+  if cuedAt then check(calledAt < cuedAt, 'callout before the brake cue') end
+end)
+test('past the exit the card moves on to the next corner', function()
+  local pilot = Pilot.new(closeTrack, config.pilot)
+  pilot:setPlan(closePlan)
+  local c1 = closeTrack.corners[1]
+  local card = pilot:update((c1.endM + config.pilot.exitHoldM + 6) / closeTrack.lengthM, 15, 1 / 60)
+  eq(card.corner.index, 2)
+  eq(card.phase, nil)
+end)
+test('a chicane is still called in one breath, with no waiting', function()
+  local pilot = Pilot.new(track, config.pilot)
+  pilot:setPlan(plan)
+  local c4 = track.corners[4]
+  -- Just past T3's apex, T4 begins within a few metres: no exit hold.
+  local card = pilot:update((track.corners[3].apexM + 6) / track.lengthM, 20, 1 / 60)
+  check(card.phase ~= 'exit' or card.corner.index ~= 3 or c4.startM - track.corners[3].apexM > 40,
+    'linked corners must not be held back')
+  eq(card.corner.index, 4)
+end)
+
+local function approachBusy(busyUntilM, speedMs)
+  local pilot = Pilot.new(track, config.pilot)
+  pilot:setPlan(plan)
+  local dt, dist, log = 1 / 60, 0, {}
+  while dist < track.corners[1].apexM do
+    local _, events = pilot:update(dist / track.lengthM, speedMs, dt, { busy = dist < busyUntilM })
+    for _, ev in ipairs(events) do log[#log + 1] = { kind = ev.kind, distM = dist } end
+    dist = dist + speedMs * dt
+  end
+  return log
+end
+test('while the driver is in trouble the co-driver waits, then speaks at once', function()
+  local free = firstOf(approachBusy(0, 30), 'corner')
+  local held = firstOf(approachBusy(110, 30), 'corner')
+  check(free and held)
+  check(free.distM < 100, 'fixture: normally called early, at ' .. free.distM .. ' m')
+  near(held.distM, 110, 1.5, 'called the moment the trouble is over')
+end)
+test('but never so long that the brake cue arrives unannounced', function()
+  local log = approachBusy(1e9, 45)            -- in trouble the whole way
+  local called, cue = firstOf(log, 'corner'), firstOf(log, 'brake')
+  check(called and cue, 'both must still happen')
+  check(called.distM < cue.distM, 'callout at ' .. called.distM .. ', brake at ' .. cue.distM)
+  local gapS = (cue.distM - called.distM) / 45
+  check(gapS >= 0.5, 'only ' .. gapS .. ' s between the callout and the brake cue')
+end)
+test('after a recovery the corner ahead is called again', function()
+  local pilot = Pilot.new(track, config.pilot)
+  pilot:setPlan(plan)
+  local pos = (track.corners[1].startM - 100) / track.lengthM
+  local _, events = pilot:update(pos, 30, 1 / 60)
+  eq(events[1] and events[1].kind, 'corner')
+  _, events = pilot:update(pos, 30, 1 / 60)
+  eq(#events, 0, 'not repeated on its own')
+  pilot:reorient()
+  _, events = pilot:update(pos, 30, 1 / 60)
+  eq(events[1] and events[1].kind, 'corner', 'repeated after reorient()')
+end)
+test('how early corners are called can be changed', function()
+  local function calledAt(lead)
+    local pilot = Pilot.new(track, config.pilot)
+    pilot:setPlan(plan)
+    local dist = 0
+    while dist < track.corners[1].apexM do
+      local _, events = pilot:update(dist / track.lengthM, 30, 1 / 60, { callLeadS = lead })
+      if events[1] and events[1].kind == 'corner' then return dist end
+      dist = dist + 0.5
+    end
+  end
+  local early, late = calledAt(6), calledAt(2)
+  check(early and late and late > early + 40, 'early ' .. tostring(early) .. ' m, late ' .. tostring(late) .. ' m')
+end)
+test('sailing past the benchmark brake point unbraked gets a second, single reminder', function()
+  local apex = track.corners[1].apexM
+  local function cues(thePlan, brakePedal)
+    local pilot = Pilot.new(track, config.pilot)
+    pilot:setPlan(thePlan)
+    local dt, dist, out = 1 / 60, 5, {}
+    while dist < apex do
+      local _, events = pilot:update(dist / track.lengthM, 50, dt, { brake = brakePedal })
+      for _, ev in ipairs(events) do
+        if ev.kind == 'brake' then out[#out + 1] = { distM = dist, again = ev.again } end
+      end
+      dist = dist + 50 * dt
+    end
+    return out
+  end
+  local ignored = cues(bench, 0)
+  eq(#ignored, 2, 'cue plus one reminder')
+  eq(ignored[2].again, true)
+  check((ignored[2].distM - ignored[1].distM) / 50 >= config.pilot.reCueS - 0.02, 'not sooner than the delay')
+  eq(#cues(bench, 0.9), 1, 'braking: no reminder')
+  eq(#cues(plan, 0), 1, 'the cautious estimate does not nag')
+end)
+test('feedback targets exist for the exit of every corner', function()
+  for k = 1, 7 do
+    local es, full = bench.exitSegs[k], segs[k]
+    check(es and es.cells <= full.cells, 'T' .. k .. ' exit segment')
+    eq(es.from, full.from)
+    check(bench.exitTargets[k], 'T' .. k .. ' exit target')
+    check(bench.exitSlices[k].timeMs <= bench.slices[k].timeMs, 'T' .. k .. ' exit comes no later')
+    eq(bench.exitTargets[k].brakeCell, bench.targets[k].brakeCell, 'T' .. k .. ' same brake point')
+    near(bench.exitTargets[k].minKmh, bench.targets[k].minKmh, 1e-9)
+  end
+  -- On the long straights the exit point is well before the end of the segment.
+  check(bench.exitSegs[1].cells < segs[1].cells - 20, 'T1 feedback comes early')
 end)
 
 print(string.format('\n%d passed, %d failed', passed, failed))

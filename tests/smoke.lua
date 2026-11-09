@@ -403,8 +403,16 @@ end)
 
 test('the next session has the teacher from the first corner, with no AI on track', function()
   local app, state = session({ store = teacherStore })
-  run(app, state, driveAs(SLOW, { laps = 1.3 }))
+  local judgedAt
+  run(app, state, driveAs(SLOW, { laps = 1.3 }), function(_, s)
+    if not judgedAt and app.cornerResults[2] then judgedAt = s.pos * world.lengthM end
+  end)
   noErrors(app, state)
+  local c2 = world.corners[2]
+  check(judgedAt, 'T2 was judged')
+  check(judgedAt > c2.endM and judgedAt < c2.endM + config.metrics.exitPadM + 15,
+    'feedback should come right at the exit: T2 ends at ' .. c2.endM .. ' m, judged at ' .. judgedAt .. ' m')
+  check(sawText(state, 'EXIT'), 'the card shows the exit phase')
   eq(app.benchLabel, 'teacher')
   near(app.teacherLap.timeMs, quickMs, 40)
   eq(#app.others, 0)

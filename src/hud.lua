@@ -66,7 +66,12 @@ local function cornerCard(app, W, s)
   else
     G.text(c.name, 16 * s, x, 7 * s, C.dim)
     G.text(title, 28 * s, x, 25 * s, C.white)
-    local dist = card.inCorner and S.status.now or distanceText(card.distStartM)
+    local dist = distanceText(card.distStartM)
+    if card.phase == 'exit' then
+      dist = S.status.exit
+    elseif card.inCorner then
+      dist = S.status.now
+    end
     G.textRight(dist, 26 * s, right, 26 * s, C.white)
   end
 
@@ -84,7 +89,10 @@ local function cornerCard(app, W, s)
     end
     local follow
     local nxt = card.nextCorner
-    if nxt and (card.nextGapM or math.huge) <= 250 then
+    if nxt and card.phase == 'exit' then
+      follow = S.status.thenWord .. ' ' .. nxt.name .. ' ' .. cornerWords(nxt)
+        .. ' in ' .. distanceText(card.nextGapM or 0)
+    elseif nxt and (card.nextGapM or math.huge) <= 250 then
       follow = S.status.thenWord .. ' ' .. nxt.name .. ' ' .. cornerWords(nxt)
     end
     local size, tx = 15 * s, x

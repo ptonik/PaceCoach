@@ -219,6 +219,7 @@ local function settingsTab(app, W)
   toggle(app, 'throttleSound', 'Say "throttle" when I am late back on the power')
   slider(app, 'voiceVolume', '##pacecoachVolume', 0, 100, 100, 'Volume: %.0f%%')
   slider(app, 'leadS', '##pacecoachLead', 0, 1, 1, 'Brake cue earlier by: %.2f s')
+  slider(app, 'callLeadS', '##pacecoachCall', 2, 6, 1, 'Call corners %.1f s before braking')
   if Sim.has['ui.button'] and ui.button('Test the voice') then
     Voice.say(app.settings.brakeBeep and 'beep' or 'brake', app.settings.voiceVolume, true)
   end

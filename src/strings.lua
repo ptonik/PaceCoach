@@ -48,6 +48,7 @@ return {
     error = 'PaceCoach hit an error. Open the Panel, Diagnostics tab.',
     estimate = 'est.',
     now = 'NOW',
+    exit = 'EXIT',
     thenWord = 'then',
     newBest = 'New best lap',
     firstBest = 'Reference lap saved',

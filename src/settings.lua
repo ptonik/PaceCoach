@@ -13,6 +13,7 @@ Settings.defaults = {
   brakeSound = true,    -- sound at the brake cue
   brakeBeep = false,    -- beep instead of the word "brake"
   leadS = 0.2,          -- extra warning before the brake cue, seconds
+  callLeadS = 3.5,      -- how long before braking a corner is called
   mph = false,
   swapLR = false,       -- escape hatch if left and right come out mirrored
   showTips = true,

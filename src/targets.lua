@@ -80,6 +80,22 @@ function Targets.build(track, lap, segs, cfg, metricsCfg)
       plan.targets[k] = Metrics.measure(sl, track, c, segs[k], metricsCfg)
     end
   end
+
+  -- The same again up to just past each corner's exit, so feedback can be
+  -- given the moment the corner is finished instead of half a straight later.
+  plan.exitSegs, plan.exitSlices, plan.exitTargets = {}, {}, {}
+  local pad = math.floor(metricsCfg.exitPadM / track.cellM)
+  for k, c in ipairs(track.corners) do
+    local seg = segs[k]
+    local cells = math.min(seg.cells, U.forward(seg.from, c.endCell, n) + pad)
+    local es = { from = seg.from, to = U.wrapIndex(seg.from + cells, n), cells = cells }
+    plan.exitSegs[k] = es
+    local sl = Metrics.slice(track, lap, nil, es)
+    if sl then
+      plan.exitSlices[k] = sl
+      plan.exitTargets[k] = Metrics.measure(sl, track, c, es, metricsCfg)
+    end
+  end
   return plan
 end
 

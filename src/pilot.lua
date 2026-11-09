@@ -35,6 +35,14 @@ function Pilot:reset()
   self.cueT = nil
   self.cueKind = nil
   self.lastCell = nil
+  self.recued = false
+end
+
+-- Call after the driver has recovered from a spin or an excursion: the corner
+-- ahead is announced again, because they have lost their place.
+function Pilot:reorient()
+  if self.target then self.announced[self.target] = nil end
+  self.armed = true
 end
 
 -- The corner a given cell belongs to, or the next one after it.
@@ -68,7 +76,9 @@ end
 
 -- pos: track position 0..1, speedMs: m/s, dt: seconds
 -- opts: { leadS = extra seconds of warning for the brake cue,
---         gas = current throttle 0..1 (for the throttle cue) }
+--         callLeadS = how early corners are called (default from config),
+--         gas, brake = current pedals 0..1,
+--         busy = true while the driver is dealing with a mistake }
 -- Returns card (what to show) and events (what to say this frame).
 function Pilot:update(pos, speedMs, dt, opts)
   local events = self.events
@@ -131,10 +141,23 @@ function Pilot:update(pos, speedMs, dt, opts)
     end
   end
 
+  -- Stay with the driver. From the apex of the corner just taken until a
+  -- little past its end they are busy with the exit, and after a mistake
+  -- they are busy recovering. The next corner waits, unless it cannot.
+  local prev = corners[((best - 2) % #corners) + 1]
+  local exiting = false
+  if prev ~= c then
+    local span = U.forward(prev.apexCell, prev.endCell, n) + math.floor(cfg.exitHoldM / cellM)
+    exiting = U.forward(prev.apexCell, cell, n) <= span
+  end
+  local vv = math.max(v, 1)
+  local urgent = (kind == 'brake' and distBrakeM / vv <= cfg.urgentS) or distStartM / vv <= cfg.urgentS
+  local hold = (exiting or (opts and opts.busy) == true) and not urgent
+
   -- Corner callouts come first so "brake" never precedes the corner name.
-  if active then
-    local leadS = cfg.announceLeadS
-    local brakeSoon = kind == 'brake' and (distBrakeM / math.max(v, 1)) <= leadS
+  if active and not hold then
+    local leadS = (opts and opts.callLeadS) or cfg.announceLeadS
+    local brakeSoon = kind == 'brake' and (distBrakeM / vv) <= leadS
     if brakeSoon or distStartM <= math.max(cfg.announceMinM, v * leadS) then
       self:_announce(best, events)
       if brakeSoon and governIdx and governIdx ~= best then
@@ -146,7 +169,10 @@ function Pilot:update(pos, speedMs, dt, opts)
   -- Brake / lift cue, fired once per approach.
   if v < 0.93 * env[cell] then
     self.belowT = self.belowT + dt
-    if self.belowT >= 0.3 then self.armed = true end
+    if self.belowT >= 0.3 then
+      self.armed = true
+      self.recued = false
+    end
   else
     self.belowT = 0
   end
@@ -157,6 +183,13 @@ function Pilot:update(pos, speedMs, dt, opts)
     self.armed = false
     self.cueT, self.cueKind = 0, kind
     events[#events + 1] = { kind = kind, corner = corners[governIdx] }
+  elseif plan.fixed and active and kind == 'brake' and not self.armed and not self.recued
+      and self.cueKind == 'brake' and self.cueT and self.cueT >= cfg.reCueS
+      and v > env[cell] and opts and opts.brake and opts.brake < 0.1 then
+    -- Past the benchmark's brake point and still not braking: say it again.
+    self.recued = true
+    self.cueT = 0
+    events[#events + 1] = { kind = 'brake', corner = corners[governIdx], again = true }
   end
   -- Throttle cue: with a benchmark, say so at the point where it went back
   -- to the throttle, if the driver has not done so yet.
@@ -198,6 +231,16 @@ function Pilot:update(pos, speedMs, dt, opts)
   card.estKmh = (c.vTargetMs or 0) * 3.6
   card.nextCorner = (#corners > 1) and corners[(best % #corners) + 1] or nil
   card.nextGapM = c.gapNextM
+  card.phase = nil
+  if exiting and hold then
+    -- Still on the way out: keep showing the corner being finished, with the
+    -- one ahead as a preview.
+    card.phase = 'exit'
+    card.corner, card.inCorner = prev, false
+    card.target = nil
+    card.estKmh = 0
+    card.nextCorner, card.nextGapM = c, distStartM
+  end
   return card, events
 end
 

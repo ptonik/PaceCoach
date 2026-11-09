@@ -295,20 +295,19 @@ local function coachText(res, mph)
 end
 App.coachText = coachText
 
--- Called when the car leaves the segment of corner k: measure it and say the
--- one thing that mattered most.
+-- Called just past the exit of corner k: measure it and say the one thing
+-- that mattered most, while the corner is still fresh.
 local function judgeCorner(k)
   local plan = App.coachPlan
-  local ref, refSlice = plan.targets[k], plan.slices[k]
+  local seg, ref, refSlice = plan.exitSegs[k], plan.exitTargets[k], plan.exitSlices[k]
   local offTrack = App.offInSeg == true
-  App.offInSeg = false
-  if not ref then return end
+  if not (seg and ref) then return end
   local lapNow = App.recorder.lap
   if lapNow.invalid == 'pit' or lapNow.invalid == 'jump' then return end
-  local sl = Metrics.slice(App.track, lapNow, App.recorder.prev, App.segs[k])
+  local sl = Metrics.slice(App.track, lapNow, App.recorder.prev, seg)
   if not sl then return end
   local c = App.track.corners[k]
-  local got = Metrics.measure(sl, App.track, c, App.segs[k], config.metrics)
+  local got = Metrics.measure(sl, App.track, c, seg, config.metrics)
   local left = Metrics.lateral(sl, refSlice, ref.minJ, App.track.leftSign)
   local wide = (c.dir == 'left') and -left or left      -- outside of a left-hander is the right
   local res = Coach.judge(ref, got, { wideM = wide, offTrack = offTrack }, config.coach)
@@ -319,6 +318,17 @@ local function judgeCorner(k)
     showTip({ title = c.name .. '  ' .. U.formatDelta(res.lossMs) .. ' s',
       body = res.text, good = res.good, rank = 20 }, config.coach.showS)
   end
+end
+
+-- Called when the car leaves the whole segment of corner k: quietly replace
+-- the time lost with the figure for the full segment, which includes what a
+-- slow exit cost down the following straight.
+local function settleCorner(k)
+  local plan, res = App.coachPlan, App.cornerResults[k]
+  local ref = plan.targets[k]
+  if not (res and ref) then return end
+  local sl = Metrics.slice(App.track, App.recorder.lap, App.recorder.prev, App.segs[k])
+  if sl then res.lossMs = sl.timeMs - ref.timeMs end
 end
 
 -- One frame -----------------------------------------------------------------
@@ -405,10 +415,25 @@ local function frame(dt)
   local ready = App.state == 'ready' and #App.track.corners > 0
   local cell = ready and Track.cellAt(App.track, s.pos) or nil
 
+  -- Is the driver busy with trouble right now? The co-driver waits if so,
+  -- and calls the corner again once they are back under control.
+  local serious = s.wheelsOut > config.lap.maxWheelsOut
+    or (s.speedKmh > 25 and (s.velAngleDeg or 0) > config.pilot.busySlideDeg)
+  if serious then App.lost, App.steadyT = true, 0 end
+  local busy = serious or (App.clock - (App.troubleAt or -1e9)) < config.pilot.busyAfterMistakeS
+  if App.lost and not serious then
+    App.steadyT = (App.steadyT or 0) + dt
+    if App.steadyT >= config.pilot.recoverS and s.speedKmh > 30 then
+      App.lost = false
+      if App.pilot then App.pilot:reorient() end
+    end
+  end
+
   -- Co-driver.
   local vol = App.settings.voiceVolume
   if ready then
-    popts.leadS, popts.gas = App.settings.leadS, s.gas
+    popts.leadS, popts.gas, popts.brake = App.settings.leadS, s.gas, s.brake
+    popts.callLeadS, popts.busy = App.settings.callLeadS, busy
     local card, events = App.pilot:update(s.pos, inPits and 0 or s.speedMs, dt, popts)
     App.card = card
     for _, ev in ipairs(events) do
@@ -427,17 +452,24 @@ local function frame(dt)
     end
   end
 
-  -- Post-corner feedback against the benchmark (or your own best).
+  -- Feedback against the benchmark (or your own best), given just past the
+  -- exit of each corner.
   if ready and App.coachPlan then
-    local k = Metrics.segmentAt(App.segs, cell, App.track.n)
+    local n = App.track.n
+    local k = Metrics.segmentAt(App.segs, cell, n)
     local was = App.segIdx
-    App.segIdx = k
-    if was and k and k ~= was then
-      if driving and k == (was % #App.segs) + 1 then
-        judgeCorner(was)
-      else
-        App.offInSeg = false
+    if k ~= was then
+      if was and k and driving and k == (was % #App.segs) + 1 then
+        if not App.exitJudged then judgeCorner(was) end
+        settleCorner(was)
       end
+      App.segIdx, App.exitJudged, App.offInSeg = k, false, false
+    end
+    local es = k and App.coachPlan.exitSegs[k]
+    if es and driving and was == k and not App.exitJudged
+        and U.forward(App.segs[k].from, cell, n) >= es.cells then
+      App.exitJudged = true
+      judgeCorner(k)
     end
   end
 
@@ -464,6 +496,7 @@ local function frame(dt)
       for i, name in ipairs(Mistakes.PRIORITY) do
         if name == id then rank = i end
       end
+      if rank <= 5 then App.troubleAt = App.clock end      -- spin, off, lock-up, slide
       -- Spins and excursions always show; lesser tips are not repeated at once.
       local lastShown = App.tipShownAt[id]
       if rank <= 2 or not lastShown or App.clock - lastShown >= config.hud.repeatS then
