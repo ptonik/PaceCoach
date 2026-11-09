@@ -29,7 +29,7 @@ new to sim racing and do not know the tracks yet.
 
 *A sketch of the HUD drawn outside the game. Fonts in the game will differ.*
 
-> **Status (0.3.0): early release.** The logic is covered by automated tests
+> **Status (0.3.1): early release.** The logic is covered by automated tests
 > and the whole app runs against a stand-in for the game, but it has had very
 > little time in the real one. Expect rough edges, and please report them
 > with the Diagnostics screenshot described below.
@@ -44,6 +44,10 @@ new to sim racing and do not know the tracks yet.
 
 1. Copy the whole `PaceCoach` folder into `assettocorsa\apps\lua\`
    so that you end up with `assettocorsa\apps\lua\PaceCoach\manifest.ini`.
+   The folder name matters: CSP runs the Lua file named after the folder.
+   `PaceCoach` works, and so does `PaceCoach-main` (what GitHub's
+   "Download ZIP" button gives you). Any other name will not start, and
+   neither will a folder nested inside another folder.
 2. Start any session. Move the mouse to the right edge of the screen to open
    the app bar and click **PaceCoach**. Open **PaceCoach Panel** too, and
    **PaceCoach Map** if you want the map on screen while driving.
@@ -113,6 +117,7 @@ Diagnostics**, and the last lines of
 
 | What you see | What to do |
 |---|---|
+| The app is in the list but its windows are empty | Check the folder name (see Install). Then open **PaceCoach Panel**: since 0.3.1 any start-up or drawing error is written in the window itself. Send me that text, or the lines mentioning PaceCoach in `Documents\Assetto Corsa\logs\custom_shaders_patch.log`. |
 | Left and right are the wrong way round | Panel → Settings → "Swap left and right" |
 | No voice | Panel → Settings → "Test the voice". Check Diagnostics for the voice status. The on-screen card works without sound. |
 | "This track has no ideal line" | The track has no AI line (some mod tracks). Lap recording and mistake tips still work; corner callouts cannot. |

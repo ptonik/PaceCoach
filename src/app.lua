@@ -528,8 +528,22 @@ function App.update(dt)
   guard('update', step, dt)
 end
 
+-- If a window fails to draw, show the reason as plain text instead of an
+-- empty (and, for the HUD, invisible) window.
+local function showError(where)
+  pcall(function()
+    ui.text('PaceCoach could not draw the ' .. where .. '.')
+    local message = tostring(App.lastError or 'unknown error')
+    while #message > 0 do
+      ui.text(message:sub(1, 90))
+      message = message:sub(91)
+    end
+    ui.text('See Documents/Assetto Corsa/logs/custom_shaders_patch.log')
+  end)
+end
+
 function App.drawHud()
-  guard('hud', Hud.draw, App)
+  if not guard('hud', Hud.draw, App) then showError('HUD') end
 end
 
 local function mapWindow()
@@ -544,11 +558,11 @@ local function mapWindow()
 end
 
 function App.drawMap()
-  guard('map', mapWindow)
+  if not guard('map', mapWindow) then showError('map') end
 end
 
 function App.drawPanel()
-  guard('panel', Panel.draw, App)
+  if not guard('panel', Panel.draw, App) then showError('panel') end
 end
 
 function App.draw3D()

@@ -2,7 +2,7 @@
 -- These are starting values; they are meant to be tuned after real laps.
 
 return {
-  version = '0.3.0',
+  version = '0.3.1',
 
   grid = {
     cellM = 2,          -- target cell length along the track

@@ -502,6 +502,54 @@ test('no 3D drawing API at all is handled too', function()
   check(markers.status:find('not available', 1, true), markers.status)
 end)
 
+print('when things go wrong at start-up')
+test('a drawing call that fails shows the reason instead of an empty window', function()
+  local app, state = session()
+  rawset(ui, 'dwriteDrawText', function() error('dwrite is broken here') end)
+  local samples = drive({ laps = 0.05 })
+  for i, s in ipairs(samples) do
+    state.frame = i
+    Fake.drive(s)
+    script.update(s.dt)
+    script.windowMain(s.dt)
+    script.windowPanel(s.dt)
+  end
+  check(app.lastError and app.lastError:find('dwrite is broken here', 1, true), tostring(app.lastError))
+  check(sawText(state, 'PaceCoach could not draw the HUD'), 'the HUD window explains itself')
+  check(sawText(state, 'dwrite is broken here'), 'with the actual error')
+end)
+test('a module that fails to load is reported in the window, not hidden', function()
+  Fake.unload()
+  local state = Fake.install({ track = world, appDir = root })
+  package.preload['src/app'] = function() error('boom while loading') end
+  local okLoad, err = pcall(dofile, root .. '/PaceCoach.lua')
+  package.preload['src/app'] = nil
+  check(okLoad, 'the entry file itself must not raise: ' .. tostring(err))
+  script.update(0.016)
+  script.draw3D()
+  script.windowMain(0.016)
+  check(sawText(state, 'PaceCoach could not start'), 'window shows the failure')
+  check(sawText(state, 'boom while loading'), 'with the reason')
+  check(#state.logs >= 1 and state.logs[1]:find('could not start', 1, true), 'and it is logged')
+end)
+test('the folder name GitHub gives a downloaded zip still starts the app', function()
+  Fake.unload()
+  package.loaded['PaceCoach'] = nil
+  local state = Fake.install({ track = world, appDir = root })
+  dofile(root .. '/PaceCoach-main.lua')
+  package.loaded['PaceCoach'] = nil
+  check(type(script.update) == 'function' and type(script.windowMain) == 'function', 'callbacks defined')
+  local samples = drive({ laps = 0.1 })
+  for i, s in ipairs(samples) do
+    state.frame = i
+    Fake.drive(s)
+    script.update(s.dt)
+    script.windowMain(s.dt)
+  end
+  eq(package.loaded['src/app'].lastError, nil)
+  eq(package.loaded['src/app'].state, 'ready')
+end)
+
 test('every clip the app can ask for exists on disk', function()
   local index = dofile(root .. '/sounds/index.lua')
   local want = { 'brake', 'beep', 'best_lap', 'then_left', 'then_right', 'throttle', 'teacher_ready' }
