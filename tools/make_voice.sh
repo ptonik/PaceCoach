@@ -40,6 +40,33 @@ clip "best_lap" "Best lap"
 clip "throttle" "Throttle"
 clip "teacher_ready" "Teacher lap recorded"
 
+# Live coaching, spoken while you drive the corner.
+clip "brake_harder"  "Brake harder!"
+clip "ease_off"      "Ease off the brake"
+clip "too_early"     "Too early"
+clip "turn_in"       "Turn in"
+clip "wait"          "Wait"
+clip "full_throttle" "Full throttle"
+clip "stay_flat"     "Stay on the throttle"
+clip "move_left"     "Move left"
+clip "move_right"    "Move right"
+
+# The lesson plan: a reminder before the focus corner, and the verdict after it.
+clip "tip_brake_later"      "Brake a little later here"
+clip "tip_brake_earlier"    "Brake a little earlier here"
+clip "tip_lift"             "No brake, just lift"
+clip "tip_more_speed"       "Carry more speed"
+clip "tip_patience"         "Be patient with the throttle"
+clip "tip_throttle_earlier" "Earlier on the throttle"
+clip "tip_no_coast"         "No coasting"
+clip "tip_apex"             "Get close to the apex"
+clip "tip_exit"             "Full throttle on the exit"
+clip "good"     "Good"
+clip "nice"     "Nice"
+clip "better"   "Better"
+clip "thats_it" "That's it"
+clip "fixed"    "Sorted. Well done."
+
 # A short two-tone beep for people who prefer it to the word "brake".
 ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=1320:duration=0.16" \
   -af "afade=t=in:d=0.01,afade=t=out:st=0.12:d=0.04,volume=0.7" \

@@ -37,6 +37,8 @@ G.colors = {
   barBg = rgbm(1, 1, 1, 0.14),
   pedalDimRed = rgbm(1.0, 0.25, 0.22, 0.5),
   pedalDimGreen = rgbm(0.30, 0.90, 0.40, 0.5),
+  infoBg = rgbm(0.05, 0.30, 0.62, 0.92),
+  focusBg = rgbm(0.03, 0.17, 0.26, 0.90),
 }
 
 G.severityColor = {
@@ -87,6 +89,13 @@ end
 function G.guessWidth(str, size)
   local wide = select(2, str:gsub('[%u%dmwMW]', ''))
   return (wide * 0.66 + (#str - wide) * 0.5) * size
+end
+
+-- The largest size up to `size` at which str fits into widthPx.
+function G.fitSize(str, size, widthPx)
+  local w = G.textWidth(str, size)
+  if w <= widthPx or w <= 0 then return size end
+  return size * widthPx / w
 end
 
 function G.textRight(str, size, xRight, y, color)

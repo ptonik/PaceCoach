@@ -14,6 +14,9 @@ local Metrics = require('src/metrics')
 local Targets = require('src/targets')
 local Coach = require('src/coach')
 local Teacher = require('src/teacher')
+local Live = require('src/live')
+local Lesson = require('src/lesson')
+local Updater = require('src/updater')
 local Sim = require('src/sim')
 local Settings = require('src/settings')
 local Voice = require('src/voice')
@@ -35,10 +38,12 @@ local App = {
   cornerResults = {},      -- corner index -> latest coach result
   others = {},             -- indices of other cars of the same model
   errorCount = 0,
+  liveCounts = {},         -- live cue id -> times spoken this session
+  history = {},            -- one entry per earlier session with this car and track
 }
 
 local rs, ms, ts, other = {}, {}, {}, {}   -- reusable sample tables
-local popts, mopts = {}, {}
+local popts, mopts, liveIn = {}, {}, {}
 
 -- Errors --------------------------------------------------------------------
 
@@ -87,6 +92,15 @@ local function cornerNear(track, cell)
   return nil
 end
 
+-- The instruction for the next attempt at a corner, from the cause of the loss.
+local function remedyText(id, value)
+  local r = S.remedy[id]
+  if not r then return nil end
+  if r.step then return string.format(r.text, Lesson.stepM(value, config.lesson)) end
+  return r.text
+end
+App.remedyText = remedyText
+
 -- Benchmark -----------------------------------------------------------------
 
 -- Decides which lap guides the brake cue and the corner targets, and which
@@ -104,6 +118,12 @@ local function refreshBenchmark()
   App.coachLabel = label or (App.ownPlan and 'own' or nil)
   App.cuePlan = App.benchPlan or App.plan
   App.pilot:setPlan(App.cuePlan)
+  App.live:setPlan(App.coachPlan)
+  -- Losses against one benchmark do not compare with losses against another.
+  if App.coachLabel ~= App.lessonLabel then
+    App.lessonLabel = App.coachLabel
+    App.lesson:rebase()
+  end
 end
 
 -- Start-up ------------------------------------------------------------------
@@ -132,6 +152,10 @@ local function buildTrack(points)
   App.plan = Track.plan(track, App.grip, config.grip)
   App.planAt = App.clock
   App.pilot = Pilot.new(track, config.pilot)
+  App.live = Live.new(track, config.live)
+  App.lesson = Lesson.new(#track.corners, config.lesson)
+  App.lessonLabel = nil
+  App.liveCue, App.gauge = nil, nil
   App.map = Map.prepare(track)
   App.card = nil
   App.segIdx = nil
@@ -163,6 +187,12 @@ local function init()
   App.teacher = Teacher.new(App.n, config.lap, config.teacher)
   App.teacher.best = App.teacherLap                 -- only a faster lap replaces a saved one
   App.grip = Grip.new(config.grip, App.reference:loadGrip(App.carId))
+  App.history = App.reference:loadHistory(App.trackId, App.carId)
+  App.updater = Updater.new({
+    get = Sim.httpGet, save = Sim.saveFile, load = Sim.loadFile, mkdir = Sim.makeDir,
+    base = config.update.base, list = config.update.manifest,
+    dir = Sim.appDir(), current = config.version, limits = config.update,
+  })
   Voice.init(Sim.appDir())
   Sim.onJump(function() App.jumped = true end)
   Sim.onSessionStart(function() App.restarted = true end)
@@ -194,6 +224,42 @@ end
 
 -- Laps ----------------------------------------------------------------------
 
+-- What the coach says at the end of a lap: where the most time went, and
+-- the one thing to work on next.
+local function lessonLine(sum)
+  if not (sum and App.track and App.coachPlan and App.settings.lessons) then return nil end
+  local corners = App.track.corners
+  local parts = {}
+  if sum.worstK and sum.worstMs and sum.worstMs >= config.lesson.minFocusMs then
+    parts[#parts + 1] = string.format(S.lesson.lapWorst, corners[sum.worstK].name, U.formatDelta(sum.worstMs))
+  end
+  local f = sum.focus
+  local text = f and remedyText(f.id, f.value)
+  if text then
+    parts[#parts + 1] = string.format(sum.changed and S.lesson.lapFocus or S.lesson.lapKeep, corners[f.k].name, text)
+  elseif sum.worstK then
+    parts = { S.lesson.lapClean }
+  end
+  if #parts == 0 then return nil end
+  return table.concat(parts, ' ')
+end
+
+-- Keeps one line of numbers per session, so progress shows across days.
+local function saveHistory()
+  if not App.lesson then return end
+  local entry = App.session
+  if not entry then
+    entry = { at = Sim.now() }
+    App.session = entry
+    App.history[#App.history + 1] = entry
+  end
+  for key, value in pairs(App.lesson:summary()) do entry[key] = value end
+  entry.laps, entry.valid = App.lapNumber, App.validLaps or 0
+  entry.best = App.sessionBestMs
+  entry.bench = App.benchmark and App.benchmark.timeMs or nil
+  App.reference:saveHistory(App.trackId, App.carId, App.history, config.lesson.historyKeep)
+end
+
 local function finishLap(lap, s)
   if not lap.complete then return end            -- out-laps and part laps are not listed
   local official = s.previousLapTimeMs
@@ -209,11 +275,19 @@ local function finishLap(lap, s)
     number = App.lapNumber, timeMs = lap.timeMs, valid = lap.valid, reason = lap.invalid,
   }
   if #App.laps > 30 then table.remove(App.laps, 1) end
+  if lap.valid then
+    App.validLaps = (App.validLaps or 0) + 1
+    if not App.sessionBestMs or lap.timeMs < App.sessionBestMs then App.sessionBestMs = lap.timeMs end
+  end
+  local advice = App.lesson and lessonLine(App.lesson:lapDone(lap.timeMs, lap.valid)) or nil
+  local function withAdvice(body) return advice and (body .. ' ' .. advice) or body end
+  guard('history', saveHistory)
 
   local time = U.formatLap(lap.timeMs)
   if not lap.valid then
     showTip({ title = 'Lap ' .. time .. ' does not count',
-      body = 'Reason: ' .. (Panel.REASONS[lap.invalid] or tostring(lap.invalid)) .. '.', rank = 50 }, 5)
+      body = withAdvice('Reason: ' .. (Panel.REASONS[lap.invalid] or tostring(lap.invalid)) .. '.'), rank = 50 },
+      advice and 8 or 5)
     return
   end
   local best = App.best
@@ -231,11 +305,12 @@ local function finishLap(lap, s)
       body = S.status.teacherBeaten
     end
     showTip({ title = (best and S.status.newBest or S.status.firstBest) .. '  ' .. time,
-      body = body, good = true, rank = 40 }, 6)
+      body = withAdvice(body), good = true, rank = 40 }, advice and 8 or 6)
     if App.settings.voice then Voice.say('best_lap', App.settings.voiceVolume) end
   else
     showTip({ title = 'Lap ' .. time,
-      body = U.formatDelta(lap.timeMs - best.timeMs) .. ' s to your best.', rank = 60 }, 5)
+      body = withAdvice(U.formatDelta(lap.timeMs - best.timeMs) .. ' s to your best.'), rank = 60 },
+      advice and 8 or 5)
   end
 end
 
@@ -314,9 +389,51 @@ local function judgeCorner(k)
   res.corner, res.at = c, App.clock
   res.text = coachText(res, App.settings.mph)
   App.cornerResults[k] = res
-  if res.id ~= 'ok' and res.text and App.settings.showTips then
-    showTip({ title = c.name .. '  ' .. U.formatDelta(res.lossMs) .. ' s',
-      body = res.text, good = res.good, rank = 20 }, config.coach.showS)
+
+  local verdict = App.lesson:record(k, res, Coach.detail(ref, got, { wideM = wide, offTrack = offTrack }))
+  res.verdict = verdict
+  local say = App.settings.voice and App.settings.praise
+  local vol = App.settings.voiceVolume
+  local title = c.name .. '  ' .. U.formatDelta(res.lossMs) .. ' s'
+
+  if verdict and verdict.focus and App.settings.lessons then
+    -- The corner being worked on: always say how this attempt went.
+    if verdict.prevMs then title = title .. '  (was ' .. U.formatDelta(verdict.prevMs) .. ')' end
+    local kind, body, good = verdict.kind, res.text, res.good
+    if kind == 'parked' then
+      body, good = S.lesson.parked, false
+      local nxt = verdict.next
+      if nxt and S.remedy[nxt.id] then
+        body = body .. ' ' .. string.format(S.lesson.nextUp, App.track.corners[nxt.k].name, S.remedy[nxt.id].short)
+      end
+    elseif kind == 'good' then
+      body, good = S.lesson.good, true
+      if say then Voice.say('thats_it', vol, false, 1.5) end
+    elseif kind == 'better' then
+      local again = App.lesson.focus and remedyText(App.lesson.focus.id, App.lesson.focus.value)
+      body, good = S.lesson.better .. (again and (' ' .. again) or ''), true
+      if say then Voice.say('better', vol, false, 1.5) end
+    elseif not body then
+      body = S.lesson[kind] or S.lesson.same
+    end
+    App.praiseAt = App.clock
+    if App.settings.showTips then
+      showTip({ title = title, body = body, good = good, rank = 15 }, config.coach.showS + 1)
+    end
+    return
+  end
+
+  -- Any other corner: a word of praise when it went well after going badly.
+  if say and offTrack == false and App.clock - (App.praiseAt or -1e9) >= config.lesson.praiseGapS then
+    local recovered = res.good and verdict and verdict.prevMs and verdict.prevMs >= config.lesson.minFocusMs
+    if res.id == 'gain' or recovered then
+      App.praiseAt = App.clock
+      Voice.say(res.id == 'gain' and 'nice' or 'good', vol, false, 1.5)
+    end
+  end
+  local vague = res.id == 'slower' and res.lossMs < config.coach.vagueMs
+  if res.id ~= 'ok' and not vague and res.text and App.settings.showTips then
+    showTip({ title = title, body = res.text, good = res.good, rank = 20 }, config.coach.showS)
   end
 end
 
@@ -328,7 +445,23 @@ local function settleCorner(k)
   local ref = plan.targets[k]
   if not (res and ref) then return end
   local sl = Metrics.slice(App.track, App.recorder.lap, App.recorder.prev, App.segs[k])
-  if sl then res.lossMs = sl.timeMs - ref.timeMs end
+  if not sl then return end
+  res.lossMs = sl.timeMs - ref.timeMs
+  local verdict = App.lesson:settle(k, sl.timeMs, res.lossMs, res.id ~= 'offTrack')
+  if not (verdict and verdict.kind == 'fixed' and App.settings.lessons) then return end
+  -- The corner being worked on is sorted: say so, and name the next one.
+  local corners = App.track.corners
+  local body = S.lesson.fixed
+  local nxt = verdict.next
+  if nxt and S.remedy[nxt.id] then
+    body = body .. ' ' .. string.format(S.lesson.nextUp, corners[nxt.k].name, S.remedy[nxt.id].short)
+  end
+  App.praiseAt = App.clock
+  if App.settings.showTips then
+    showTip({ title = string.format(S.lesson.sorted, corners[k].name) .. '  ' .. U.formatDelta(verdict.fromMs)
+      .. ' to ' .. U.formatDelta(verdict.toMs) .. ' s', body = body, good = true, rank = 15 }, config.coach.showS + 2)
+  end
+  if App.settings.voice and App.settings.praise then Voice.say('fixed', App.settings.voiceVolume, false, 2) end
 end
 
 -- One frame -----------------------------------------------------------------
@@ -344,6 +477,8 @@ local function frame(dt)
   if App.restarted or App.jumped then
     App.recorder:restart(App.jumped and 'jump' or nil)
     if App.pilot then App.pilot:reset() end
+    if App.live then App.live:reset() end
+    App.liveCue = nil
     if App.restarted then App.teacher:reset() end
     App.restarted, App.jumped, App.pendingLap, App.segIdx = false, false, nil, nil
   end
@@ -441,6 +576,14 @@ local function frame(dt)
         if App.settings.voice then
           Voice.say(ev.corner.severity .. '_' .. ev.corner.dir, vol)
           for _, c in ipairs(ev.chain or {}) do Voice.say('then_' .. c.dir, vol) end
+          -- The corner being worked on gets its instruction with the call.
+          local f = App.settings.lessons and App.coachPlan and App.lesson.focus or nil
+          local r = f and S.remedy[f.id]
+          if r then
+            local here = f.k == ev.corner.index
+            for _, c in ipairs(ev.chain or {}) do here = here or f.k == c.index end
+            if here then Voice.say(r.clip, vol, false, 5) end
+          end
         end
       elseif ev.kind == 'brake' then
         if App.settings.brakeSound then
@@ -449,6 +592,27 @@ local function frame(dt)
       elseif ev.kind == 'throttle' then
         if App.settings.throttleSound then Voice.say('throttle', vol, true) end
       end
+    end
+  end
+
+  -- The live coach: compares the car with the benchmark at this very point
+  -- and speaks up while there is still time to do something about it.
+  App.gauge = nil
+  if ready and App.coachPlan then
+    local li = liveIn
+    li.cell, li.pos, li.v, li.gas, li.brake = cell, s.pos, s.speedKmh, s.gas, s.brake
+    li.x, li.z = s.x, s.z
+    li.busy = busy or inPits or not driving or App.settings.liveCoach ~= true
+    li.pilotCue = App.card and App.card.cue or nil
+    li.turnCue, li.lineCue = App.settings.turnCue, App.settings.lineCue
+    li.maxPerCorner = App.settings.beginner and 2 or config.live.maxPerCorner
+    local gauge, said = App.live:update(li, dt)
+    App.gauge = gauge
+    for _, ev in ipairs(said) do
+      local def = S.live[ev.id]
+      App.liveCue = { id = ev.id, def = def, corner = ev.corner, untilT = App.clock + config.live.showS }
+      App.liveCounts[ev.id] = (App.liveCounts[ev.id] or 0) + 1
+      if App.settings.voice then Voice.say(def.clip, vol, ev.urgent, 0.7) end
     end
   end
 
@@ -508,6 +672,40 @@ local function frame(dt)
   end
 end
 
+-- Updates -------------------------------------------------------------------
+
+-- Looks for a new version once, a few seconds after start-up, and tells the
+-- driver when the state of an update changes.
+local function watchUpdate()
+  local u = App.updater
+  if not u then return end
+  if not App.updateAsked and App.clock >= config.update.checkAfterS then
+    App.updateAsked = true
+    if App.settings.autoCheck and Sim.has['web.get'] then u:check() end
+  end
+  u:pump()
+  if u.state == 'ready' then
+    -- Writing a few megabytes can cost a frame or two: never do it at speed.
+    local s = App.car
+    if (s.speedKmh or 0) < 5 or s.inPit or s.inPitlane then u:apply() end
+  end
+  if u.state == App.updateState then return end
+  App.updateState = u.state
+  if u.state == 'available' then
+    if App.settings.autoInstall then
+      u:install()
+    else
+      showTip({ title = string.format(S.update.toast, u.remote.version), body = S.update.toastBody,
+        good = true, rank = 70 }, 8)
+    end
+  elseif u.state == 'done' then
+    showTip({ title = string.format(S.update.doneToast, u.installed), body = S.update.doneBody,
+      good = true, rank = 70 }, 10)
+  elseif u.state == 'failed' then
+    Sim.log('update: ' .. tostring(u.error))
+  end
+end
+
 local function step(dt)
   App.clock = App.clock + dt
   Voice.update(dt)
@@ -515,6 +713,7 @@ local function step(dt)
     init()
     return
   end
+  watchUpdate()
   if App.state == 'incompatible' then return end
   if App.state == 'sampling' then sample() end
   frame(dt)

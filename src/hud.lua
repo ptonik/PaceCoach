@@ -16,10 +16,11 @@ end
 local function statusCard(text, W, s)
   local size = 16 * s
   local lines = wrap(text, size, W - 28 * s)
-  local h = (20 + #lines * 21) * s
+  local h = (36 + #lines * 21) * s
   G.rect(0, 0, W, h, C.cardBg, 10 * s)
+  G.text('PaceCoach ' .. config.version, 12 * s, 14 * s, 8 * s, C.dim)
   for i, line in ipairs(lines) do
-    G.text(line, size, 14 * s, (10 + (i - 1) * 21) * s, C.white)
+    G.text(line, size, 14 * s, (26 + (i - 1) * 21) * s, C.white)
   end
   return h + 6 * s
 end
@@ -44,20 +45,40 @@ local function cornerWords(c)
   return S.severityLower[c.severity] .. ' ' .. S.dirLower[c.dir]
 end
 
-local CUE_BG = { brake = C.brakeBg, lift = C.liftBg, throttle = C.goodBg }
+local CUE_BG = { brake = C.brakeBg, lift = C.liftBg, throttle = C.goodBg, info = C.infoBg }
 
 local function cornerCard(app, W, s)
   local card = app.card
   local c = card.corner
   local h = 108 * s
-  G.rect(0, 0, W, h, card.cue and CUE_BG[card.cue] or C.cardBg, 10 * s)
+  -- A live coaching cue takes the card over for a moment, unless the
+  -- co-driver's own brake or throttle call is up.
+  local live = app.liveCue
+  if card.cue or not (live and app.clock < live.untilT) then live = nil end
+  local bg = C.cardBg
+  if card.cue then
+    bg = CUE_BG[card.cue] or C.cardBg
+  elseif live then
+    bg = CUE_BG[live.def.tone] or C.cardBg
+  end
+  G.rect(0, 0, W, h, bg, 10 * s)
 
-  local sevColor = G.severityColor[c.severity] or C.white
-  G.cornerArrow(10 * s, 8 * s, 78 * s, c.dir, c.severity, card.cue and C.white or sevColor)
+  local shown = live and live.corner or c
+  local sevColor = G.severityColor[shown.severity] or C.white
+  G.cornerArrow(10 * s, 8 * s, 78 * s, shown.dir, shown.severity, (card.cue or live) and C.white or sevColor)
 
   local x, right = 100 * s, W - 14 * s
   local title = S.severity[c.severity] .. ' ' .. S.dir[c.dir]
-  if card.cue then
+  if live then
+    G.text(shown.name .. '  ' .. S.severity[shown.severity] .. ' ' .. S.dir[shown.dir], 16 * s, x, 7 * s, C.white)
+    local size = G.fitSize(live.def.text, 44 * s, right - x)
+    G.text(live.def.text, size, x, 22 * s + (44 * s - size) * 0.5, C.white)
+    local hint = live.def.hint
+    if hint and hint ~= '' then
+      hint = string.format(hint, S.who[app.coachLabel] or 'the benchmark')
+      G.text(hint, G.fitSize(hint, 13 * s, right - x), x, 68 * s, C.white)
+    end
+  elseif card.cue then
     -- The cue word takes over the big line; the corner moves to the small one.
     local forCorner = (card.cue ~= 'throttle' and card.brakeFor) or c
     G.text(forCorner.name .. '  ' .. S.severity[forCorner.severity] .. ' ' .. S.dir[forCorner.dir],
@@ -78,7 +99,7 @@ local function cornerCard(app, W, s)
   -- Second line: the target for this corner, then what follows it.
   -- With a benchmark the target is real (gear and slowest speed); without
   -- one it is an estimate and only shown on the advanced HUD.
-  if not card.cue then
+  if not card.cue and not live then
     local target, real = nil, false
     local tg = card.target
     if tg and tg.minKmh then
@@ -115,11 +136,59 @@ local function cornerCard(app, W, s)
     if frac > 0.02 then
       G.rect(bx0, by, bx0 + (bx1 - bx0) * frac, by + 10 * s, color, 5 * s)
     end
-    if not card.cue and card.distBrakeM > 0 then
+    if not card.cue and not live and card.distBrakeM > 0 then
       G.textRight('brake in ' .. distanceText(card.distBrakeM), 14 * s, right, 83 * s, C.dim)
     end
   end
   return h + 6 * s
+end
+
+-- The instruction for the corner being worked on, shown while it is the
+-- next corner.
+local function focusRow(app, W, s, y)
+  local f = app.settings.lessons and app.coachPlan and app.lesson and app.lesson.focus
+  local card = app.card
+  if not (f and card and card.ready and card.phase ~= 'exit' and card.corner.index == f.k) then return y end
+  local text = app.remedyText(f.id, f.value)
+  if not text then return y end
+  local h = 28 * s
+  G.rect(0, y, W, y + h, C.focusBg, 8 * s)
+  G.text(S.lesson.focus, 13 * s, 14 * s, y + 7 * s, C.cyan)
+  local tx = 14 * s + G.textWidth(S.lesson.focus, 13 * s) + 12 * s
+  local size = G.fitSize(text, 15 * s, W - 14 * s - tx)
+  G.text(text, size, tx, y + 5 * s + (15 * s - size) * 0.5, C.white)
+  return y + h + 6 * s
+end
+
+-- Speed against the benchmark at this very point of the track: the bar
+-- grows to the right in green when you are faster, to the left in red when
+-- you are slower.
+local PACE_FULL_KMH = 30
+local function paceRow(app, W, s, y)
+  local g = app.gauge
+  if not (g and g.active and g.dv and app.settings.paceBar) then return y end
+  if (app.car.speedKmh or 0) < 30 then return y end
+  local h = 24 * s
+  G.rect(0, y, W, y + h, C.cardBg, 8 * s)
+  G.text('vs ' .. (S.benchmark[app.coachLabel] or 'benchmark'), 12 * s, 14 * s, y + 5 * s, C.dim)
+  local x0, x1 = 112 * s, W - 98 * s
+  local mid = (x0 + x1) / 2
+  local top, bottom = y + 9 * s, y + 15 * s
+  G.rect(x0, top, x1, bottom, C.barBg, 3 * s)
+  local frac = U.clamp(g.dv / PACE_FULL_KMH, -1, 1)
+  local color = C.dim
+  if frac > 0.07 then
+    color = C.green
+    G.rect(mid, top, mid + (x1 - mid) * frac, bottom, color, 3 * s)
+  elseif frac < -0.07 then
+    color = C.red
+    G.rect(mid + (mid - x0) * frac, top, mid, bottom, color, 3 * s)
+  end
+  G.rect(mid - s, y + 5 * s, mid + s, y + 19 * s, C.white, 0)
+  local diff = app.settings.mph and (g.dv * 0.621371) or g.dv
+  G.textRight(string.format('%+d %s', U.round(diff), app.settings.mph and 'mph' or 'km/h'),
+    14 * s, W - 14 * s, y + 4 * s, color)
+  return y + h + 6 * s
 end
 
 local function deltaRow(app, W, s, y)
@@ -209,6 +278,10 @@ function Hud.draw(app)
     y = statusCard(S.status.loading, W, s)
   end
 
+  if app.card and app.card.ready and app.state == 'ready' then
+    y = focusRow(app, W, s, y)
+    y = paceRow(app, W, s, y)
+  end
   if not app.settings.beginner then
     y = deltaRow(app, W, s, y)
     if app.settings.ghostPedals then y = pedalRow(app, W, s, y) end

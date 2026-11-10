@@ -105,6 +105,8 @@ function Fake.install(opts)
   local function place(car, wheels, s, extra)
     local x, z, dx, dz = lineAt(s.pos)
     local leftX, leftZ = -dz, dx                -- left of travel in the synthetic world
+    local off = (extra and extra.offLeftM) or s.offLeftM or 0
+    x, z = x + leftX * off, z + leftZ * off     -- driving beside the line
     local function set(tbl, key, value) if rawget(tbl, key) ~= nil then tbl[key] = value end end
     set(car, 'speedKmh', s.v)
     set(car, 'gas', s.gas)
@@ -138,12 +140,24 @@ function Fake.install(opts)
     for key, value in pairs(extra or {}) do
       if key == 'slipRatio' then
         for i = 0, 3 do set(wheels[i], 'slipRatio', value[i + 1]) end
+      elseif key == 'offLeftM' then
+        -- already applied to the position above
       else
         set(car, key, value)
       end
     end
   end
-  function Fake.drive(s, extra) place(car, wheels, s, extra) end
+  -- Web requests are answered a frame later, as they would be in the game.
+  state.requests, state.pending, state.web = {}, {}, opts.web or {}
+  function Fake.flushWeb()
+    local list = state.pending
+    state.pending = {}
+    for _, deliver in ipairs(list) do deliver() end
+  end
+  function Fake.drive(s, extra)
+    Fake.flushWeb()
+    place(car, wheels, s, extra)
+  end
   function Fake.driveOther(index, s, extra)
     local o = state.others[index]
     place(o.car, o.wheels, s, extra)
@@ -208,7 +222,34 @@ function Fake.install(opts)
     onCarJumped = function(i, cb) need(i == 0 and type(cb) == 'function', 'onCarJumped') state.jumpCallbacks[#state.jumpCallbacks + 1] = cb end,
     onSessionStart = function(cb) need(type(cb) == 'function', 'onSessionStart') state.sessionCallbacks[#state.sessionCallbacks + 1] = cb end,
     log = function(msg) state.logs[#state.logs + 1] = tostring(msg) end,
+    unloadApp = function() state.unloaded = (state.unloaded or 0) + 1 end,
   }))
+
+  -- web -----------------------------------------------------------------------
+  if not removed['web'] then
+    _G.web = strict('web', keep('web.', {
+      get = function(url, a, b)
+        local callback = b or a
+        need(type(url) == 'string' and url:match('^https://[%w%-_./]+$'), 'web.get url: ' .. tostring(url))
+        need(type(callback) == 'function', 'web.get callback')
+        need(b == nil or type(a) == 'table', 'web.get headers')
+        state.requests[#state.requests + 1] = url
+        state.pending[#state.pending + 1] = function()
+          if state.offline then return callback('connection failed', nil) end
+          local served = state.web[url]
+          if type(served) == 'string' then
+            callback(nil, { status = 200, headers = {}, body = served })
+          elseif type(served) == 'table' then
+            callback(nil, served)
+          else
+            callback(nil, { status = 404, headers = {}, body = 'Not Found' })
+          end
+        end
+      end,
+    }))
+  else
+    _G.web = nil
+  end
 
   -- render --------------------------------------------------------------------
   local function isVec3(v) return type(v) == 'table' and isNum(v.x) and isNum(v.y) and isNum(v.z) end

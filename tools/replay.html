@@ -1,0 +1,465 @@
+<title>PaceCoach Replay</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap">
+<style>
+/* Layout: a pit-wall monitor. The track view and the app's own HUD sit side by
+   side on a dark screen; the lap ladder runs underneath like a timing page. */
+:root {
+  --bg: #eceeea;
+  --panel: #f8f9f6;
+  --ink: #161b1d;
+  --muted: #586366;
+  --line: #cfd5d0;
+  --accent: #0b6e99;
+  --brake: #c2271e;
+  --throttle: #1a8541;
+  --screen: #171d1b;
+  --screen-ink: #e9efeb;
+  --screen-dim: #93a09a;
+  --display: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue', sans-serif;
+  --body: 'Barlow', 'Segoe UI', system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1112; --panel: #151b1c; --ink: #e7ecec; --muted: #93a0a2; --line: #273033;
+    --accent: #58c4ef; --brake: #ff6258; --throttle: #4dd47c;
+    --screen: #080b0a; --screen-ink: #e9efeb; --screen-dim: #87948e;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1112; --panel: #151b1c; --ink: #e7ecec; --muted: #93a0a2; --line: #273033;
+  --accent: #58c4ef; --brake: #ff6258; --throttle: #4dd47c;
+  --screen: #080b0a; --screen-ink: #e9efeb; --screen-dim: #87948e;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--body); font-size: 16px; line-height: 1.5;
+}
+.wrap {
+  max-width: 1120px; margin: 0 auto; padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 22px;
+}
+header { display: flex; flex-direction: column; gap: 6px; }
+h1 {
+  font-family: var(--display); font-weight: 700; font-size: clamp(34px, 6vw, 52px);
+  line-height: 1; letter-spacing: 0.01em; margin: 0; text-transform: uppercase; text-wrap: balance;
+}
+h1 span { color: var(--accent); }
+.lede { margin: 0; max-width: 64ch; color: var(--muted); }
+h2 {
+  font-family: var(--display); font-weight: 600; font-size: 15px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--muted); margin: 0;
+}
+
+/* The screen */
+.monitor {
+  background: var(--screen); color: var(--screen-ink); border-radius: 6px; padding: 12px;
+  display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; align-items: start;
+}
+.pane { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.pane-label {
+  font-family: var(--display); font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--screen-dim); display: flex; justify-content: space-between; gap: 12px;
+}
+canvas { display: block; width: 100%; max-width: 100%; border-radius: 4px; }
+#scene { aspect-ratio: 16 / 11; background: #222a26; }
+#hud { aspect-ratio: 460 / 310; background: #2c3731; }
+.radio { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; min-height: 104px; }
+.radio li { display: flex; gap: 10px; font-size: 15px; color: var(--screen-dim); }
+.radio li:first-child { color: var(--screen-ink); font-weight: 600; }
+.radio time { font-variant-numeric: tabular-nums; min-width: 4.6em; color: var(--screen-dim); font-weight: 400; }
+@media (max-width: 760px) { .monitor { grid-template-columns: minmax(0, 1fr); } }
+
+/* Transport */
+.transport { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+button {
+  font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 4px; padding: 7px 14px; cursor: pointer; min-height: 38px;
+}
+button:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+#play { font-family: var(--display); font-weight: 600; font-size: 19px; letter-spacing: 0.08em; text-transform: uppercase; min-width: 104px; background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.group { display: flex; gap: 4px; }
+#scrub { flex: 1 1 220px; min-width: 0; accent-color: var(--accent); }
+#clock { font-family: var(--display); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 9.5em; }
+
+/* Lap ladder */
+.ladder { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.ladder-wrap { overflow-x: auto; }
+.ladder th {
+  text-align: left; font-family: var(--display); font-weight: 600; font-size: 13px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--muted); padding: 4px 10px 6px 0; border-bottom: 1px solid var(--line);
+}
+.ladder td { padding: 0 10px 0 0; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+.ladder td.focus { white-space: normal; min-width: 12em; color: var(--muted); }
+.ladder tr.now td { background: var(--panel); }
+.ladder tr.now td.focus { color: var(--ink); }
+.ladder button { border: 0; background: none; padding: 8px 0; min-height: 0; font-weight: 600; color: var(--accent); }
+.ladder .time { font-family: var(--display); font-size: 21px; font-weight: 600; }
+.gap { display: flex; align-items: center; gap: 8px; min-width: 150px; }
+.gap i { display: block; height: 8px; background: var(--brake); border-radius: 1px; }
+.gap span { color: var(--muted); font-size: 14px; }
+.ladder tr.teacher .time, .ladder tr.teacher td { color: var(--muted); }
+
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 28px; }
+.notes p { margin: 4px 0 0; color: var(--muted); max-width: 46ch; }
+.notes strong { color: var(--ink); font-weight: 600; }
+</style>
+
+<main class="wrap">
+  <header>
+    <h1>PaceCoach <span>replay</span></h1>
+    <p class="lede">A simulated learner drives eight laps while the real PaceCoach code coaches them: one corner at a time, until the lap comes together. The overlay and every spoken line are the app's own output.</p>
+  </header>
+
+  <section class="monitor" aria-label="Replay">
+    <div class="pane">
+      <div class="pane-label"><span>Track view (drawn by this page)</span><span id="speed">0 km/h</span></div>
+      <canvas id="scene" role="img" aria-label="Top-down view of the car on the track, with the teacher's car as a ghost"></canvas>
+    </div>
+    <div class="pane">
+      <div class="pane-label"><span>PaceCoach HUD (the app's output)</span><span id="delta"></span></div>
+      <canvas id="hud" role="img" aria-label="The PaceCoach overlay as the app draws it"></canvas>
+      <div class="pane-label"><span>Spoken</span></div>
+      <ol class="radio" id="radio" aria-live="off"></ol>
+    </div>
+  </section>
+
+  <section class="transport" aria-label="Playback controls">
+    <button id="play" type="button">Play</button>
+    <div class="group" role="group" aria-label="Speed">
+      <button type="button" class="rate" data-rate="1" aria-pressed="true">1x</button>
+      <button type="button" class="rate" data-rate="3" aria-pressed="false">3x</button>
+      <button type="button" class="rate" data-rate="8" aria-pressed="false">8x</button>
+    </div>
+    <button id="sound" type="button" aria-pressed="true">Voice on</button>
+    <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Position in the session">
+    <span id="clock">Lap 1  0:00.0</span>
+  </section>
+
+  <section>
+    <h2>Lap by lap</h2>
+    <div class="ladder-wrap">
+      <table class="ladder">
+        <thead><tr><th>Lap</th><th>Time</th><th>Gap to the teacher</th><th>What the coach asked for next</th></tr></thead>
+        <tbody id="ladder"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="notes">
+    <div>
+      <h2>The driver</h2>
+      <p>A <strong>simulation</strong>, not a person: a learner who brakes far too early for the hairpin, creeps through turn 2, takes the wrong side of the road into the chicane and coasts out of turn 6. After each lap they do what the coach asked in the focus corner, and nothing else.</p>
+    </div>
+    <div>
+      <h2>The coach</h2>
+      <p>The <strong>actual app code</strong>, version <span id="version"></span>, running outside the game against a stand-in for it. Each drawing call the HUD made was recorded as it happened and is replayed here; the voice clips are the ones the game plays.</p>
+    </div>
+    <div>
+      <h2>What it is not</h2>
+      <p>Game footage. The track is a 1.9 km test circuit made for the app's automated tests, and fonts differ from the game's. Red on the line is where the teacher brakes, green where it is flat out.</p>
+    </div>
+  </section>
+</main>
+
+<script>
+const R = /*REPLAY*/null;
+const AUDIO = /*AUDIO*/null;
+(function () {
+  if (!R) return;
+  const F = R.frames, CALLS = R.calls, PAL = R.palette;
+  const T = 0, LAP = 1, LT = 2, X = 3, Z = 4, H = 5, GX = 6, GZ = 7, V = 8, GAS = 9, BRK = 10, D = 14, DRAW = 15;
+  const END = F[F.length - 1][T];
+  const $ = (id) => document.getElementById(id);
+  const scene = $('scene'), hud = $('hud');
+  const sctx = scene.getContext('2d'), hctx = hud.getContext('2d');
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // Track geometry: centre line, edges, and the teacher's pedals along it.
+  const N = R.track.length / 2;
+  const cx = new Float32Array(N), cz = new Float32Array(N), nx = new Float32Array(N), nz = new Float32Array(N);
+  for (let i = 0; i < N; i++) { cx[i] = R.track[i * 2]; cz[i] = R.track[i * 2 + 1]; }
+  for (let i = 0; i < N; i++) {
+    const a = (i + N - 1) % N, b = (i + 1) % N;
+    const dx = cx[b] - cx[a], dz = cz[b] - cz[a], len = Math.hypot(dx, dz) || 1;
+    nx[i] = -dz / len; nz[i] = dx / len;                       // left of travel
+  }
+  const HALF = 5.5;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (let i = 0; i < N; i++) {
+    minX = Math.min(minX, cx[i]); maxX = Math.max(maxX, cx[i]);
+    minZ = Math.min(minZ, cz[i]); maxZ = Math.max(maxZ, cz[i]);
+  }
+
+  // State ---------------------------------------------------------------------
+  let t = 1.75, playing = false, rate = 1, voice = true, lastStamp = 0, sayPtr = 0, nearIdx = 0;
+  const clips = {};
+  const radio = [];
+
+  function frameAt(time) {
+    let lo = 0, hi = F.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (F[mid][T] <= time) lo = mid; else hi = mid - 1; }
+    return lo;
+  }
+  function lapTime(ms) {
+    const m = Math.floor(ms / 60000), s = (ms - m * 60000) / 1000;
+    return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
+  }
+  function fit(canvas, ctx) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return [w, h];
+  }
+
+  // The HUD: replay the app's drawing calls ------------------------------------
+  const HUD_FONT = '"Barlow", "Segoe UI", system-ui, sans-serif';
+  function rounded(ctx, x0, y0, x1, y1, r) {
+    const w = x1 - x0, h = y1 - y0;
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    ctx.beginPath();
+    ctx.moveTo(x0 + r, y0); ctx.arcTo(x1, y0, x1, y1, r); ctx.arcTo(x1, y1, x0, y1, r);
+    ctx.arcTo(x0, y1, x0, y0, r); ctx.arcTo(x0, y0, x1, y0, r); ctx.closePath();
+  }
+  function drawHud(frame) {
+    const [w, h] = fit(hud, hctx);
+    hctx.clearRect(0, 0, w, h);
+    const k = w / R.hud[0];
+    hctx.save();
+    hctx.scale(k, k);
+    hctx.textBaseline = 'top';
+    for (const id of frame[DRAW]) {
+      const c = CALLS[id];
+      switch (c[0]) {
+        case 'r': hctx.fillStyle = PAL[c[5]]; rounded(hctx, c[1], c[2], c[3], c[4], c[6]); hctx.fill(); break;
+        case 'l': hctx.strokeStyle = PAL[c[5]]; hctx.lineWidth = c[6]; hctx.lineCap = 'round';
+          hctx.beginPath(); hctx.moveTo(c[1], c[2]); hctx.lineTo(c[3], c[4]); hctx.stroke(); break;
+        case 'c': hctx.fillStyle = PAL[c[4]]; hctx.beginPath(); hctx.arc(c[1], c[2], c[3], 0, 6.2832); hctx.fill(); break;
+        case 't': case 'tr': case 'tc':
+          hctx.fillStyle = PAL[c[5]];
+          hctx.font = (c[2] >= 26 ? '600 ' : '500 ') + c[2] + 'px ' + HUD_FONT;
+          hctx.textAlign = c[0] === 'tr' ? 'right' : (c[0] === 'tc' ? 'center' : 'left');
+          hctx.fillText(c[1], c[3], c[4] + c[2] * 0.1);
+          break;
+        case 'p':
+          hctx.strokeStyle = PAL[c[2]]; hctx.lineWidth = c[4]; hctx.beginPath();
+          for (let i = 0; i < c[1].length; i += 2) { if (i) hctx.lineTo(c[1][i], c[1][i + 1]); else hctx.moveTo(c[1][i], c[1][i + 1]); }
+          if (c[3]) hctx.closePath();
+          hctx.stroke(); break;
+      }
+    }
+    hctx.restore();
+  }
+
+  // The scene: a follow camera above the car -------------------------------------
+  const SEV = { hairpin: '#ff4038', tight: '#ff9420', medium: '#ffdb33', fast: '#4de666', kink: '#59ccff' };
+  function drawScene(a, b, u) {
+    const [w, h] = fit(scene, sctx);
+    const x = a[X] + (b[X] - a[X]) * u, z = a[Z] + (b[Z] - a[Z]) * u;
+    let dh = b[H] - a[H];
+    if (dh > Math.PI) dh -= 2 * Math.PI; else if (dh < -Math.PI) dh += 2 * Math.PI;
+    const head = a[H] + dh * u;
+    const gx = a[GX] + (b[GX] - a[GX]) * u, gz = a[GZ] + (b[GZ] - a[GZ]) * u;
+    const scale = w / 84, ox = w / 2, oy = h * 0.72;
+    const fx = Math.cos(head), fz = Math.sin(head);
+    const px = (wx, wz) => ox + ((wx - x) * fz - (wz - z) * fx) * scale;
+    const py = (wx, wz) => oy - ((wx - x) * fx + (wz - z) * fz) * scale;
+
+    sctx.fillStyle = '#26302a';
+    sctx.fillRect(0, 0, w, h);
+
+    // nearest track point, searched outward from where the car was last
+    let best = nearIdx, bestD = Infinity;
+    for (let k = -40; k <= 40; k++) {
+      const i = (nearIdx + k + N) % N, d = (cx[i] - x) ** 2 + (cz[i] - z) ** 2;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (bestD > 2500) { for (let i = 0; i < N; i++) { const d = (cx[i] - x) ** 2 + (cz[i] - z) ** 2; if (d < bestD) { bestD = d; best = i; } } }
+    nearIdx = best;
+    const from = best - 30, to = best + 78;
+
+    // road
+    sctx.beginPath();
+    for (let j = from; j <= to; j++) { const i = (j + N) % N; const X1 = cx[i] + nx[i] * HALF, Z1 = cz[i] + nz[i] * HALF; if (j === from) sctx.moveTo(px(X1, Z1), py(X1, Z1)); else sctx.lineTo(px(X1, Z1), py(X1, Z1)); }
+    for (let j = to; j >= from; j--) { const i = (j + N) % N; const X1 = cx[i] - nx[i] * HALF, Z1 = cz[i] - nz[i] * HALF; sctx.lineTo(px(X1, Z1), py(X1, Z1)); }
+    sctx.closePath();
+    sctx.fillStyle = '#3a423f';
+    sctx.fill();
+    sctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    sctx.lineWidth = 1.5;
+    sctx.stroke();
+
+    // the teacher's line: red where it brakes, green where it is flat out
+    sctx.lineWidth = Math.max(2, scale * 0.6);
+    sctx.lineCap = 'butt';
+    for (let j = from; j < to; j++) {
+      const i = (j + N) % N, n2 = (i + 1) % N, zc = R.zone[i];
+      sctx.strokeStyle = zc === 'b' ? 'rgba(255,70,60,0.95)' : (zc === 'g' ? 'rgba(77,214,110,0.55)' : 'rgba(255,255,255,0.35)');
+      sctx.beginPath(); sctx.moveTo(px(cx[i], cz[i]), py(cx[i], cz[i])); sctx.lineTo(px(cx[n2], cz[n2]), py(cx[n2], cz[n2])); sctx.stroke();
+    }
+    // start line
+    { const X1 = cx[0] + nx[0] * HALF, Z1 = cz[0] + nz[0] * HALF, X2 = cx[0] - nx[0] * HALF, Z2 = cz[0] - nz[0] * HALF;
+      sctx.strokeStyle = '#ffffff'; sctx.lineWidth = 3; sctx.setLineDash([5, 5]);
+      sctx.beginPath(); sctx.moveTo(px(X1, Z1), py(X1, Z1)); sctx.lineTo(px(X2, Z2), py(X2, Z2)); sctx.stroke(); sctx.setLineDash([]); }
+
+    // corner names at the apex, on the outside of the road
+    sctx.font = '600 15px "Barlow Condensed", "Arial Narrow", sans-serif';
+    sctx.textAlign = 'center'; sctx.textBaseline = 'middle';
+    for (const c of R.corners) {
+      let i = 0, bd = Infinity;
+      for (let k = c.from; k <= c.to; k++) { const q = (k + N) % N, d = (cx[q] - c.x) ** 2 + (cz[q] - c.z) ** 2; if (d < bd) { bd = d; i = q; } }
+      const side = c.dir === 'left' ? -1 : 1;
+      const X1 = c.x + nx[i] * side * (HALF + 7), Z1 = c.z + nz[i] * side * (HALF + 7);
+      const sx = px(X1, Z1), sy = py(X1, Z1);
+      if (sx < -30 || sx > w + 30 || sy < -30 || sy > h + 30) continue;
+      sctx.fillStyle = 'rgba(8,11,10,0.8)'; rounded(sctx, sx - 17, sy - 11, sx + 17, sy + 11, 3); sctx.fill();
+      sctx.fillStyle = SEV[c.sev] || '#fff'; sctx.fillText(c.name, sx, sy + 1);
+    }
+
+    // cars
+    function car(wx, wz, angle, fill, stroke, braking) {
+      const L = Math.max(13, 4.4 * scale), W = Math.max(6, 1.9 * scale);
+      sctx.save();
+      sctx.translate(px(wx, wz), py(wx, wz));
+      sctx.rotate(head - angle);
+      rounded(sctx, -W / 2, -L / 2, W / 2, L / 2, W * 0.3);
+      if (fill) { sctx.fillStyle = fill; sctx.fill(); }
+      sctx.strokeStyle = stroke; sctx.lineWidth = 1.5; sctx.stroke();
+      if (braking) { sctx.fillStyle = '#ff3b30'; sctx.fillRect(-W / 2, L / 2 - 3, W, 3); }
+      sctx.restore();
+    }
+    let gi = 0, gd = Infinity;
+    for (let i = 0; i < N; i += 2) { const d = (cx[i] - gx) ** 2 + (cz[i] - gz) ** 2; if (d < gd) { gd = d; gi = i; } }
+    car(gx, gz, Math.atan2(nx[gi] * -1, nz[gi]) , null, 'rgba(255,255,255,0.8)', false);
+    car(x, z, head, '#f4f7f5', '#0b0e0d', a[BRK] > 0.1);
+
+    // whole-track inset, top right
+    const mw = Math.min(150, w * 0.3), mh = mw * (maxZ - minZ + 60) / (maxX - minX + 60);
+    const mx0 = w - mw - 10, my0 = 10, ms = mw / (maxX - minX + 60);
+    const mpx = (wx) => mx0 + (wx - minX + 30) * ms, mpy = (wz) => my0 + mh - (wz - minZ + 30) * ms;
+    sctx.fillStyle = 'rgba(8,11,10,0.62)'; rounded(sctx, mx0 - 4, my0 - 4, mx0 + mw + 4, my0 + mh + 4, 4); sctx.fill();
+    sctx.strokeStyle = 'rgba(255,255,255,0.7)'; sctx.lineWidth = 1.5; sctx.beginPath();
+    for (let i = 0; i < N; i += 3) { if (i) sctx.lineTo(mpx(cx[i]), mpy(cz[i])); else sctx.moveTo(mpx(cx[i]), mpy(cz[i])); }
+    sctx.closePath(); sctx.stroke();
+    sctx.strokeStyle = '#fff'; sctx.beginPath(); sctx.arc(mpx(gx), mpy(gz), 3, 0, 6.2832); sctx.stroke();
+    sctx.fillStyle = '#59ccff'; sctx.beginPath(); sctx.arc(mpx(x), mpy(z), 3.5, 0, 6.2832); sctx.fill();
+
+    // pedals, bottom left: brake and throttle
+    const bw = 9, bh = Math.min(70, h * 0.22), bx = 12, by = h - 12 - bh;
+    sctx.fillStyle = 'rgba(8,11,10,0.62)'; rounded(sctx, bx - 5, by - 5, bx + bw * 2 + 9, by + bh + 5, 4); sctx.fill();
+    sctx.fillStyle = 'rgba(255,255,255,0.16)'; sctx.fillRect(bx, by, bw, bh); sctx.fillRect(bx + bw + 4, by, bw, bh);
+    sctx.fillStyle = '#ff4038'; sctx.fillRect(bx, by + bh * (1 - a[BRK]), bw, bh * a[BRK]);
+    sctx.fillStyle = '#4de666'; sctx.fillRect(bx + bw + 4, by + bh * (1 - a[GAS]), bw, bh * a[GAS]);
+  }
+
+  // Captions, clock, ladder ------------------------------------------------------
+  function showRadio() {
+    const el = $('radio');
+    el.textContent = '';
+    for (let i = radio.length - 1; i >= Math.max(0, radio.length - 4); i--) {
+      const li = document.createElement('li'), tm = document.createElement('time');
+      tm.textContent = radio[i].stamp; li.append(tm, document.createTextNode(radio[i].text)); el.append(li);
+    }
+  }
+  function stampFor(time) { const f = F[frameAt(time)]; return 'L' + f[LAP] + ' ' + lapTime(f[LT]); }
+  function seekSays() {
+    radio.length = 0; sayPtr = 0;
+    while (sayPtr < R.says.length && R.says[sayPtr][0] <= t) { radio.push({ stamp: stampFor(R.says[sayPtr][0]), text: R.says[sayPtr][2] }); sayPtr++; }
+    showRadio();
+  }
+  function speak(clip) {
+    if (!voice || rate !== 1 || !AUDIO || !AUDIO[clip]) return;
+    try { const au = clips[clip] || (clips[clip] = new Audio(AUDIO[clip])); au.currentTime = 0; const p = au.play(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+  }
+  function advanceSays() {
+    let changed = false;
+    while (sayPtr < R.says.length && R.says[sayPtr][0] <= t) {
+      const s = R.says[sayPtr++];
+      radio.push({ stamp: stampFor(s[0]), text: s[2] }); speak(s[1]); changed = true;
+    }
+    if (changed) showRadio();
+  }
+  let ladderLap = 0;
+  function buildLadder() {
+    const body = $('ladder');
+    const worst = Math.max(...R.laps.map((l) => l.ms - R.teacherMs), 1);
+    const tr0 = document.createElement('tr'); tr0.className = 'teacher';
+    tr0.innerHTML = '<td>Teacher</td><td class="time"></td><td></td><td class="focus">The benchmark: an opponent in the same car</td>';
+    tr0.children[1].textContent = lapTime(R.teacherMs); body.append(tr0);
+    for (const lap of R.laps) {
+      const tr = document.createElement('tr'); tr.dataset.lap = lap.n;
+      const gap = lap.ms - R.teacherMs;
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Lap ' + lap.n;
+      b.setAttribute('aria-label', 'Jump to lap ' + lap.n);
+      b.addEventListener('click', () => { seek(lap.t0 + 0.05); });
+      const td1 = document.createElement('td'); td1.append(b);
+      const td2 = document.createElement('td'); td2.className = 'time'; td2.textContent = lapTime(lap.ms);
+      const td3 = document.createElement('td'); const g = document.createElement('div'); g.className = 'gap';
+      const bar = document.createElement('i'); bar.style.width = Math.max(2, 110 * gap / worst) + 'px';
+      const lab = document.createElement('span'); lab.textContent = '+' + (gap / 1000).toFixed(2) + ' s'; g.append(bar, lab); td3.append(g);
+      const td4 = document.createElement('td'); td4.className = 'focus'; td4.textContent = lap.focus || 'Nothing left worth a lesson';
+      tr.append(td1, td2, td3, td4); body.append(tr);
+    }
+  }
+  function render() {
+    const i = frameAt(t), a = F[i], b = F[Math.min(i + 1, F.length - 1)];
+    const span = b[T] - a[T];
+    const u = span > 0 ? Math.min(1, Math.max(0, (t - a[T]) / span)) : 0;
+    drawScene(a, b, u);
+    drawHud(a);
+    $('speed').textContent = Math.round(a[V]) + ' km/h';
+    $('delta').textContent = a[D] === null ? '' : ((a[D] >= 0 ? '+' : '-') + Math.abs(a[D] / 1000).toFixed(2) + ' s to the teacher');
+    $('clock').textContent = 'Lap ' + a[LAP] + '  ' + lapTime(a[LT]);
+    if (document.activeElement !== $('scrub')) $('scrub').value = Math.round(t / END * 1000);
+    if (a[LAP] !== ladderLap) {
+      ladderLap = a[LAP];
+      for (const tr of $('ladder').children) tr.classList.toggle('now', Number(tr.dataset.lap) === ladderLap);
+    }
+  }
+  function seek(time) { t = Math.max(0, Math.min(END, time)); seekSays(); render(); }
+  function setPlaying(on) {
+    playing = on;
+    $('play').textContent = on ? 'Pause' : (t >= END ? 'Replay' : 'Play');
+    if (on) { lastStamp = 0; requestAnimationFrame(tick); }
+  }
+  function tick(stamp) {
+    if (!playing) return;
+    const dt = lastStamp ? Math.min(0.1, (stamp - lastStamp) / 1000) : 0;
+    lastStamp = stamp;
+    t += dt * rate;
+    if (t >= END) { t = END; advanceSays(); render(); setPlaying(false); return; }
+    advanceSays(); render();
+    requestAnimationFrame(tick);
+  }
+
+  $('play').addEventListener('click', () => { if (!playing && t >= END) seek(0); setPlaying(!playing); });
+  for (const b of document.querySelectorAll('.rate')) {
+    b.addEventListener('click', () => {
+      rate = Number(b.dataset.rate);
+      for (const o of document.querySelectorAll('.rate')) o.setAttribute('aria-pressed', o === b ? 'true' : 'false');
+    });
+  }
+  $('sound').addEventListener('click', () => {
+    voice = !voice;
+    $('sound').setAttribute('aria-pressed', voice ? 'true' : 'false');
+    $('sound').textContent = voice ? 'Voice on' : 'Voice off';
+  });
+  $('scrub').addEventListener('input', () => { seek($('scrub').value / 1000 * END); });
+  $('version').textContent = R.version;
+  buildLadder();
+  seekSays();
+  render();
+  new ResizeObserver(() => render()).observe(scene);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(render);
+})();
+</script>

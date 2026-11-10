@@ -1,7 +1,7 @@
 # PaceCoach
 
-A co-driver and driving coach for Assetto Corsa. It is made for people who are
-new to sim racing and do not know the tracks yet.
+A co-driver and live driving coach for Assetto Corsa. It is made for people who
+are new to sim racing and do not know the tracks yet.
 
 **From the first second, with nothing to set up:**
 
@@ -16,23 +16,36 @@ new to sim racing and do not know the tracks yet.
 
 **Once it has a teacher lap** (see "Getting a teacher" below):
 
+- **Coaches you through the corner while you drive it.** It compares you with
+  the teacher at the same spot on the track, many times a second, and speaks
+  up while there is still time to act: "brake harder", "ease off the brake",
+  "too early", "turn in", "wait", "full throttle", "move left".
+- **Gives you one thing to fix at a time.** After a lap or two it picks the
+  corner that costs you most, says what to change ("Brake about 15 m later"),
+  reminds you as you arrive there, and tells you how the attempt went. When
+  the corner is sorted it moves on to the next one.
 - **Real targets for every corner**: which gear and how slow, shown on the
-  card before you arrive.
-- **Brake and throttle cues from the teacher's own driving**, still adapted to
-  your speed.
-- **Feedback after every corner**: how much time you lost there and the one
-  thing that cost it, for example "T3 +0.31 s, braking 25 m too early".
+  card before you arrive, and a speed bar against the teacher at all times.
 - **A driving line on the track**, red where the teacher brakes and green
   where it is on full throttle.
+- **Keeps score of your progress**: skill scores for braking points, corner
+  speed, exits, line and consistency, five training steps to tick off, your
+  ideal lap, and a line per session so you can see the trend over days.
 
-![HUD sketch](docs/hud-preview.png)
+**And it keeps itself up to date**: it fetches new versions from this
+repository by itself.
 
-*A sketch of the HUD drawn outside the game. Fonts in the game will differ.*
+![A frame of the replay](docs/replay-preview.png)
 
-> **Status (0.3.1): early release.** The logic is covered by automated tests
-> and the whole app runs against a stand-in for the game, but it has had very
-> little time in the real one. Expect rough edges, and please report them
-> with the Diagnostics screenshot described below.
+*A frame from a replay of a simulated session. The overlay on the right is
+what the app drew; the track view is a stand-in for the game.
+`tools/make_replay.sh` builds the page.*
+
+> **Status (0.4.0): early release.** The logic is covered by automated tests,
+> and the whole app runs against a stand-in for the game in which a simulated
+> learner is coached from 3.7 s off the teacher to 0.8 s off in eight laps.
+> It has had very little time in the real game. Expect rough edges, and
+> please report them with the Diagnostics screenshot described below.
 
 ## What you need
 
@@ -42,18 +55,55 @@ new to sim racing and do not know the tracks yet.
 
 ## Install
 
-1. Copy the whole `PaceCoach` folder into `assettocorsa\apps\lua\`
-   so that you end up with `assettocorsa\apps\lua\PaceCoach\manifest.ini`.
+### The easy way
+
+1. Download this repository (green **Code** button, **Download ZIP**) and
+   unpack it anywhere.
+2. Close the game. Open the `install` folder and double-click
+   **Install PaceCoach.bat**.
+
+The installer finds your Assetto Corsa folder through Steam (or asks for it),
+moves any older PaceCoach folders out of the way, and copies the app in under
+the one name the game accepts. It also adds **PaceCheck**, a tiny app that
+reports what is wrong if PaceCoach will not start. `install/install.ps1` is
+short and says exactly what it does. It is new and has not been proven on
+other people's PCs yet; if it stops with a message, install by hand.
+
+**Update PaceCoach from GitHub.bat** in the same folder does the same with the
+newest version from this page, without you downloading anything first.
+
+### By hand
+
+1. Copy the whole folder into `assettocorsa\apps\lua\` and name it
+   `PaceCoach`, so that you end up with
+   `assettocorsa\apps\lua\PaceCoach\manifest.ini`.
    The folder name matters: CSP runs the Lua file named after the folder.
-   `PaceCoach` works, and so does `PaceCoach-main` (what GitHub's
-   "Download ZIP" button gives you). Any other name will not start, and
-   neither will a folder nested inside another folder.
+   `PaceCoach` works, and so does `PaceCoach-main` (what GitHub's ZIP unpacks
+   to). Any other name will not start, and neither will a folder nested
+   inside another folder. Delete older copies first.
 2. Start any session. Move the mouse to the right edge of the screen to open
    the app bar and click **PaceCoach**. Open **PaceCoach Panel** too, and
    **PaceCoach Map** if you want the map on screen while driving.
 3. Drag the windows where you want them. The HUD scales with its width.
 
 Keep the main PaceCoach window open while you drive: recording runs with it.
+
+## Updates
+
+A few seconds after it starts, the app asks this repository whether there is a
+newer version. If there is, it downloads the files that changed, checks every
+one of them against the published size and checksum, and installs them the
+next time the car stands still. The new version is used from the next time
+you start the game. A note on the HUD tells you when that happened.
+
+- It talks to `raw.githubusercontent.com` only: one small request per session
+  to look, and more only when there is something to download.
+- If anything about a download looks wrong, nothing is installed.
+- **Panel → Settings → Updates** has both switches (look for updates;
+  install without asking), the current state, and **Check for updates** /
+  **Update now** buttons.
+- If your CSP build cannot download files, the panel says so; use
+  **Update PaceCoach from GitHub.bat** instead.
 
 ## Getting a teacher
 
@@ -73,7 +123,8 @@ If an AI driver later sets a faster clean lap, it replaces the old one.
 **Panel → Teacher** shows which benchmark is in use, your gap to it, your last
 pass through every corner, and the target for every corner.
 
-If you beat the teacher, your own best lap becomes the benchmark.
+If you beat the teacher, your own best lap becomes the benchmark. Without any
+teacher, the coach compares you with your own best lap once you have one.
 
 ### A lap from a faster friend
 
@@ -100,14 +151,20 @@ Pick an original Kunos track and a slow car.
    session, come back with the same car and track, and the best lap should
    still be listed under **Panel → Laps**.
 
-**Part 2: with a teacher (about 5 minutes)**
+**Part 2: with a teacher (about 10 minutes)**
 
 6. Start a session with one to three AI opponents in the same car.
    **Panel → Teacher** should say it is watching that many cars.
 7. After their first full lap or two you should get "Teacher lap recorded".
-   The card should now show a gear and a speed for each corner.
-8. Drive a lap. After each corner a line of feedback should appear, and a
-   coloured line should lie on the track ahead of you.
+   The card should now show a gear and a speed for each corner, and a thin
+   speed bar should appear under it.
+8. Drive two laps. You should hear "turn in" at the main corners, and a live
+   cue such as "ease off the brake" when you are well off the teacher's
+   pace. After each corner a line of feedback should appear, and a coloured
+   line should lie on the track ahead of you.
+9. At the end of a lap the note should name your biggest loss and a focus
+   corner. **Panel → Coach** should show the same focus, your skill scores
+   and the training steps.
 
 If something is wrong, send two things: a screenshot of **Panel →
 Diagnostics**, and the last lines of
@@ -117,15 +174,17 @@ Diagnostics**, and the last lines of
 
 | What you see | What to do |
 |---|---|
-| The app is in the list but its windows are empty | Check the folder name (see Install). Then open **PaceCoach Panel**: since 0.3.1 any start-up or drawing error is written in the window itself. Send me that text, or the lines mentioning PaceCoach in `Documents\Assetto Corsa\logs\custom_shaders_patch.log`. |
+| The app is in the list but its windows stay empty | The game is not running the app's code, which nearly always means the folder is named wrong, nested, or an older copy is still there. Run the installer (see Install), or open **PaceCheck** from the app bar and send a screenshot of it. |
 | Left and right are the wrong way round | Panel → Settings → "Swap left and right" |
 | No voice | Panel → Settings → "Test the voice". Check Diagnostics for the voice status. The on-screen card works without sound. |
-| "This track has no ideal line" | The track has no AI line (some mod tracks). Lap recording and mistake tips still work; corner callouts cannot. |
+| "This track has no ideal line" | The track has no AI line (some mod tracks). Lap recording and mistake tips still work; corner callouts and coaching cannot. |
 | Brake cue feels far too early (no teacher yet) | Normal at first: the app starts cautious and trusts the car more as it sees you corner and brake harder. A teacher lap fixes this properly. |
 | Brake cue feels too late or too early (with a teacher) | Change "Brake cue earlier by" in Settings. |
 | Corners are called too early or too late | Panel → Settings → "Call corners ... before braking". Lower is later. |
+| The coach talks too much | Panel → Settings: switch off "turn in", the line advice, praise, or all live coaching. The beginner HUD already limits it to two cues per corner. |
 | No teacher appears | The AI cars must be the same model as yours, and one of them has to finish a clean lap without visiting the pits. Panel → Teacher shows how many cars are being watched. |
 | No line on the track | Panel → Teacher shows the line's status. If it reports an error, send it to me; the rest of the app is unaffected. Meanwhile the game's own "Ideal line" assist is a good substitute. |
+| "Update failed" in Settings | Nothing was changed. Try "Check for updates" again later, or run **Update PaceCoach from GitHub.bat**. |
 
 ## Reading the HUD
 
@@ -139,44 +198,86 @@ Diagnostics**, and the last lines of
   until you have the car back, then calls the corner ahead again.
 - **Second line**: with a teacher, the gear and the slowest speed to aim for.
 - **Bar**: fills up as you approach the brake point. When the card turns red
-  and says **BRAKE**, brake.
-- **Green card saying THROTTLE**: the teacher is already back on the power
-  here and you are not.
+  and says **BRAKE**, brake. If you are already braking it does not nag.
+- **FOCUS strip** under the card: the one instruction for this corner, while
+  it is the corner you are working on.
+- **Speed bar** ("vs teacher"): your speed against the teacher's at this
+  exact point. Green to the right means faster, red to the left slower.
 - **Card below**: one thing at a time. After a mistake, what happened and
   why. Just past each corner's exit, the time lost there and the main cause.
+  At the end of a lap, your biggest loss and what to work on next.
 
-Beginner mode (the default) shows only this. Switch it off in Settings to add
-the delta to your best lap and to the teacher, and two pairs of pedal bars:
-yours on top, the teacher's below, red for brake and green for throttle.
+### What the coach says while you drive
+
+The card changes colour and shows the cue, with one line of reason under it.
+
+| Cue | When | What to do |
+|---|---|---|
+| **BRAKE HARDER** | You are braking, but too gently to make the corner at this speed | Press harder now |
+| **EASE OFF** | Still braking although you are already well under the teacher's speed | Release the brake and let the car roll in |
+| **TOO EARLY** | On the brakes long before the teacher's brake point | Come off, and wait for the "brake" call |
+| **NO BRAKE** | Braking for a corner the teacher only lifts for | Just lift off the throttle |
+| **TURN IN** | You are reaching the teacher's turn-in point | Turn now, one smooth movement |
+| **WAIT** | On the throttle mid-corner, before the teacher | Hold on until the car is turned |
+| **FULL THROTTLE** | The exit is open and you are not flat out | All the way down |
+| **STAY FLAT** | Lifting on a straight where the teacher is still flat out | Keep it down until the brake call |
+| **MOVE LEFT / RIGHT** | More than 2.5 m off the teacher's line on the way to a corner | Use the road |
+
+It never says more than two of these per corner on the beginner HUD (three
+otherwise, "turn in" not counted), leaves a pause between them, and says
+nothing at all while you are sorting out a slide.
+
+Beginner mode (the default) shows only the above. Switch it off in Settings
+to add the delta to your best lap and to the teacher, and two pairs of pedal
+bars: yours on top, the teacher's below, red for brake and green for throttle.
 
 Without a teacher, the brake point and corner speeds are **estimates** worked
 out from the shape of the track and the grip the app has seen so far. They are
 deliberately cautious.
 
+## The lesson plan
+
+**Panel → Coach** is the page to open in the pits.
+
+- **Focus corner.** The corner with the biggest typical loss over your last
+  three passes, and its most common cause. One bad pass does not count for
+  much. The instruction moves in steps: a brake point that is 60 m too early
+  is moved 25 m at a time, not all at once.
+- **How a focus ends.** Two good passes in a row and the corner is "sorted";
+  the coach names the next one. "Good" is judged over the whole stretch from
+  the straight before to the straight after, so a slow exit cannot hide.
+  After five tries with no progress the corner is put aside for a while.
+- **Training steps**, in the order a beginner should take them: stay on the
+  track, brake at the right place, carry the speed, get on the power, be
+  consistent. Each shows how far along you are.
+- **Skills**: five scores from 0 to 100 against the teacher.
+- **Ideal lap**: the best you have driven through every part of the track,
+  added up. It is a lap you have already driven, only not in one go.
+- **Where the time goes**: every corner, biggest typical loss first.
+- **Sessions**: one line per session with this car and track.
+
 ## How to practise with it
 
 A plan for your first sessions. Stay on one car and one track: a slow,
 forgiving car (for example the Abarth 500 or the BMW M3 E30) on a short track
-(for example Magione or Vallelunga Club). Get a teacher lap early; it makes
-every step below more precise.
+(for example Magione or Vallelunga Club). Get a teacher lap early.
 
 1. **Learn where the track goes.** Drive slowly. Listen to the calls and look
-   as far ahead as you can. Goal: five laps in a row without leaving the track.
-2. **Brake in a straight line.** Brake when the cue comes, firmly, with the
-   wheel straight. Ease off the pedal as the car slows. Goal: a session with
-   no "Locked brakes" and no "Off track".
-3. **Hit the targets.** Use the gear and speed on the card. If the feedback
-   says "too early", move your braking a little later next lap, a few metres
-   at a time.
-4. **Slow in, fast out.** Finish your braking, turn, wait until you can see
-   the exit, then squeeze the throttle as you straighten the wheel. Goal: no
-   "Wheelspin", no "Coasting", and no THROTTLE card.
+   as far ahead as you can. Goal: three clean laps in a row (training step 1).
+2. **Do what the focus says, and only that.** One corner, one change. Leave
+   the rest of the lap alone until the coach moves on.
+3. **Brake in a straight line.** Brake when the cue comes, firmly, with the
+   wheel straight. Ease off the pedal as the car slows. If you hear "too
+   early" or "ease off", you are giving time away before the corner.
+4. **Slow in, fast out.** Finish your braking, turn at "turn in", wait until
+   you can see the exit, then squeeze the throttle as you straighten the
+   wheel. Goal: no "wait", no "full throttle".
 5. **Use all the road.** Start each corner from the outside edge, touch the
    inside at the middle, and let the car run back to the outside on the way
-   out. Follow the line on the track.
-6. **Be consistent.** Aim for five valid laps within one second of each other.
-   Then work on the corner with the biggest loss in Panel → Teacher, and only
-   that one, until it shrinks.
+   out. Follow the line on the track and listen for "move left / right".
+6. **Be consistent.** Three laps within half a second of each other is the
+   last training step. Then look at "Where the time goes" and start again
+   from the top of that list.
 
 Two habits that help more than anything else: look where you want to go, not
 at the bonnet, and change one thing at a time.
@@ -189,36 +290,41 @@ Panel → Settings.
 - **Show mistake tips**: also covers the feedback after each corner.
 - **Spoken corner callouts**, **Sound at the brake cue**,
   **Beep instead of "brake"**, **Say "throttle"**, **Volume**.
+- **Live coaching while I drive**, **Say "turn in"**,
+  **Say "move left / right"**, **Focus corner**, **Tell me when a corner
+  goes well**.
 - **Brake cue earlier by**: extra warning time, 0 to 1 second.
 - **Call corners ... before braking**: how early a corner is announced,
   2 to 6 seconds.
-- **Driving line on the track**, **Pedal bars on the advanced HUD**.
+- **Driving line on the track**, **Pedal bars on the advanced HUD**,
+  **Speed bar against the benchmark**.
 - **I use a gamepad**: turns off the steering-smoothness check.
 - **Speeds in mph**.
 - **Swap left and right**: only if callouts are mirrored.
+- **Updates**: see above.
 
-Your laps are saved in `Documents\Assetto Corsa\PaceCoach\`, one file per car
-and track. Replacing the app folder with a newer version does not touch them.
-
-## What comes next
-
-- **Stage 3, Training**: drills in order (line, braking, apex, exits,
-  consistency), a ranking of the corners that cost you most over a whole
-  session, and progress across sessions.
+Your laps and your history are saved in `Documents\Assetto Corsa\PaceCoach\`,
+a few small files per car and track. Updating or reinstalling the app does
+not touch them.
 
 ## For tinkering
 
-The `tests` and `tools` folders are not used by the game. With LuaJIT installed:
+The `tests`, `tools`, `install` and `extras` folders are not used by the
+game. With LuaJIT installed:
 
 ```
-luajit tests/run.lua          # logic tests
-luajit tests/smoke.lua        # whole app against a stand-in for the game
-luajit tests/render_hud.lua out.svg   # sketch of the HUD
-tools/make_voice.sh [voice]   # regenerate the voice clips (macOS)
+luajit tests/run.lua            # logic tests
+luajit tests/smoke.lua          # whole app against a stand-in for the game
+luajit tests/story.lua 8        # prints what the coach says to a simulated learner, lap by lap
+tools/make_replay.sh out.html   # the same session as a page you can watch (needs ffmpeg, python3)
+tools/make_voice.sh [voice]     # regenerate the voice clips (macOS)
+luajit tools/make_update.lua "what is new"   # refresh update.txt before a commit
 ```
 
-Every threshold lives in `src/config.lua`. All on-screen text is in
-`src/strings.lua`. Only `src/sim.lua` reads game state.
+`update.txt` is the list the in-app updater reads. The tests fail when it does
+not match the files, so it cannot be forgotten. Every threshold lives in
+`src/config.lua`. All on-screen text is in `src/strings.lua`. Only
+`src/sim.lua` reads game state.
 
 ## License
 

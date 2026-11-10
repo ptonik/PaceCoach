@@ -1118,8 +1118,41 @@ test('sailing past the benchmark brake point unbraked gets a second, single remi
   eq(#ignored, 2, 'cue plus one reminder')
   eq(ignored[2].again, true)
   check((ignored[2].distM - ignored[1].distM) / 50 >= config.pilot.reCueS - 0.02, 'not sooner than the delay')
-  eq(#cues(bench, 0.9), 1, 'braking: no reminder')
+  eq(#cues(bench, 0.9), 0, 'already braking: nothing to say')
   eq(#cues(plan, 0), 1, 'the cautious estimate does not nag')
+  -- Someone who brakes when told to hears it once.
+  local pilot = Pilot.new(track, config.pilot)
+  pilot:setPlan(bench)
+  local dt, dist, heard = 1 / 60, 5, 0
+  while dist < apex do
+    local _, events = pilot:update(dist / track.lengthM, 50, dt, { brake = heard > 0 and 0.9 or 0 })
+    for _, ev in ipairs(events) do if ev.kind == 'brake' then heard = heard + 1 end end
+    dist = dist + 50 * dt
+  end
+  eq(heard, 1, 'braking after the cue: no reminder')
+end)
+test('"brake" is never repeated in a burst for a gentle braker', function()
+  -- A driver who slows at half the benchmark's rate skims along under the
+  -- braking curve for a long time. That used to fire the cue every frame.
+  local c = track.corners[1]
+  local pilot = Pilot.new(track, config.pilot)
+  pilot:setPlan(bench)
+  local dt, dist, v, times = 1 / 60, 5, 55, {}
+  local clock = 0
+  while dist < c.apexM do
+    local braking = dist > 60
+    if braking then v = math.max(bench.targets[1].minKmh / 3.6, v - 0.5 * 9.81 * dt) end
+    local card, events = pilot:update(dist / track.lengthM, v, dt, { brake = braking and 0.5 or 0, gas = braking and 0 or 1 })
+    for _, ev in ipairs(events) do if ev.kind == 'brake' then times[#times + 1] = clock end end
+    dist, clock = dist + v * dt, clock + dt
+    if braking and v < bench.env[Track.cellAt(track, dist / track.lengthM)] then
+      check(card.cue ~= 'brake', 'no red BRAKE card for a driver who is braking and under the curve, at ' .. dist .. ' m')
+    end
+  end
+  check(#times <= config.pilot.maxBrakeCues, 'said ' .. #times .. ' times')
+  for i = 2, #times do
+    check(times[i] - times[i - 1] >= config.pilot.brakeCueGapS - 0.02, 'two cues too close together')
+  end
 end)
 test('feedback targets exist for the exit of every corner', function()
   for k = 1, 7 do
@@ -1133,6 +1166,563 @@ test('feedback targets exist for the exit of every corner', function()
   end
   -- On the long straights the exit point is well before the end of the segment.
   check(bench.exitSegs[1].cells < segs[1].cells - 20, 'T1 feedback comes early')
+end)
+
+-- Live coach ------------------------------------------------------------------
+
+local Live = require('src/live')
+print('live coach')
+
+-- Drives from fromM to toM. By default the driver copies the benchmark
+-- exactly; act(distM, ref) may return overrides { v =, gas =, brake =, off =,
+-- busy =, pilotCue =, turnCue =, lineCue =, max = } for that frame.
+local function coachRun(thePlan, fromM, toM, act)
+  local lap = thePlan.lap
+  local live = Live.new(track, config.live)
+  live:setPlan(thePlan)
+  local dt, dist, said, gauge = 1 / 60, fromM, {}, nil
+  local n = track.n
+  while dist < toM do
+    local pos = (dist / track.lengthM) % 1
+    local cell = Track.cellAt(track, pos)
+    local ref = { v = lap.v[cell], gas = lap.gas[cell], brake = lap.brake[cell] }
+    local o = act and act(dist % track.lengthM, ref, cell) or {}
+    local v = o.v or ref.v
+    local x, z = Recorder.valueAt(lap, 'x', pos), Recorder.valueAt(lap, 'z', pos)
+    if o.off then
+      local i0, i1 = U.wrapIndex(cell - 2, n), U.wrapIndex(cell + 2, n)
+      local dx, dz = lap.x[i1] - lap.x[i0], lap.z[i1] - lap.z[i0]
+      local len = math.sqrt(dx * dx + dz * dz)
+      x, z = x - dz / len * o.off, z + dx / len * o.off
+    end
+    local events
+    gauge, events = live:update({
+      cell = cell, pos = pos, v = v, gas = o.gas or ref.gas, brake = o.brake or ref.brake, x = x, z = z,
+      busy = o.busy, pilotCue = o.pilotCue, turnCue = o.turnCue, lineCue = o.lineCue, maxPerCorner = o.max,
+    }, dt)
+    for _, ev in ipairs(events) do
+      said[#said + 1] = { id = ev.id, distM = dist, k = ev.corner.index, urgent = ev.urgent }
+    end
+    dist = dist + math.max(5, v / 3.6) * dt
+  end
+  return said, gauge, live
+end
+local function ids(said)
+  local out = {}
+  for i, e in ipairs(said) do out[i] = e.id .. '@T' .. e.k end
+  return table.concat(out, ' ')
+end
+local function find(said, id)
+  for _, e in ipairs(said) do if e.id == id then return e end end
+end
+local T2 = track.corners[2]
+local t2 = bench.targets[2]
+local t2BrakeM = track.s[t2.brakeCell]
+local t2MinM = track.s[t2.minCell]
+
+test('fixture: the benchmark brakes for T2 well before the corner', function()
+  check(t2BrakeM < T2.startM - 30 and t2MinM > t2BrakeM + 40, 'brake at ' .. t2BrakeM .. ', slowest at ' .. t2MinM)
+end)
+test('a driver who copies the benchmark is only told where to turn in', function()
+  local said, gauge = coachRun(bench, 5, track.lengthM + 5)
+  for _, e in ipairs(said) do eq(e.id, 'turnIn', 'unexpected cue ' .. ids(said)) end
+  check(#said >= 4, 'turn-in for the main corners: ' .. ids(said))
+  for _, e in ipairs(said) do
+    local c = track.corners[e.k]
+    near(e.distM % track.lengthM, c.startM, 25, 'turn-in for ' .. c.name .. ' comes at the corner')
+  end
+  check(not find(said, 'x') and not ids(said):find('@T4') and not ids(said):find('@T5'),
+    'the second and third part of a chicane get no turn-in call: ' .. ids(said))
+  near(gauge.dv, 0, 0.01, 'speed difference')
+  near(gauge.offLeftM, 0, 0.05, 'on the line')
+end)
+test('"turn in" can be switched off', function()
+  local said = coachRun(bench, 5, track.lengthM + 5, function() return { turnCue = false } end)
+  eq(#said, 0, ids(said))
+end)
+test('braking long before the benchmark: "too early", then "ease off"', function()
+  local said = coachRun(bench, t2BrakeM - 160, T2.startM - 5, function(m, ref)
+    if m > t2BrakeM - 100 then
+      -- On the brakes 100 m early, and 20% under the benchmark's speed from then on.
+      return { brake = 0.7, gas = 0, v = ref.v * (m > t2BrakeM - 60 and 0.8 or 1) }
+    end
+  end)
+  local early, ease = find(said, 'tooEarly'), find(said, 'easeOff')
+  check(early and ease, 'both cues: ' .. ids(said))
+  eq(early.k, 2)
+  check(early.distM < t2BrakeM - 80, 'said at once, at ' .. early.distM .. ' m')
+  check(ease.distM >= t2BrakeM and ease.distM < t2MinM, 'ease off comes inside the braking zone')
+  eq(#said, 2, 'each said once: ' .. ids(said))
+end)
+test('arriving faster and braking gently: "brake harder", urgently', function()
+  local function run(pedal, extra)
+    return coachRun(bench, t2BrakeM - 60, t2MinM - 20, function(m, ref)
+      local o = { turnCue = false }
+      if m > t2BrakeM + 5 then o.v, o.brake, o.gas = ref.v + 14, pedal, 0 end
+      for k, v in pairs(extra or {}) do o[k] = v end
+      return o
+    end)
+  end
+  local said = run(0.4)
+  local harder = find(said, 'brakeHarder')
+  check(harder, 'cue expected: ' .. ids(said))
+  eq(harder.urgent, true)
+  check(harder.distM < t2BrakeM + 40, 'within half a second, at ' .. (harder.distM - t2BrakeM) .. ' m into the zone')
+  eq(#said, 1, 'once: ' .. ids(said))
+  eq(#run(0.95), 0, 'already braking as hard as possible: nothing useful to add')
+  check(find(run(0.4, { pilotCue = 'brake' }), 'brakeHarder'), 'it may speak over the red BRAKE card')
+  eq(#run(0.4, { busy = true }), 0, 'never while the driver is busy with a slide')
+end)
+test('on the throttle mid-corner before the benchmark: "wait"', function()
+  -- The synthetic benchmark holds part throttle through corners. Give it a
+  -- realistic trace: off the throttle from turn-in until 10 m past the apex.
+  local lap = copyLap(teacherLap)
+  local cells = U.forward(T2.startCell, T2.apexCell, track.n) + 5
+  for j = -10, cells do lap.gas[U.wrapIndex(T2.startCell + j, track.n)] = 0 end
+  local plan2 = Targets.build(track, lap, segs, config.targets, config.metrics)
+  local function run(scale)
+    return coachRun(plan2, T2.startM - 30, T2.endM, function(m, ref)
+      if m > T2.startM + 4 then return { gas = 0.8, v = ref.v * scale, turnCue = false } end
+      return { turnCue = false }
+    end)
+  end
+  local said = run(1)
+  check(find(said, 'wait'), 'cue expected: ' .. ids(said))
+  eq(find(said, 'wait').k, 2)
+  eq(#said, 1, ids(said))
+  eq(find(run(0.8), 'wait'), nil, 'a driver who is much slower may use the throttle')
+end)
+test('lifting on a straight: "stay flat"; part throttle on an exit: "full throttle"', function()
+  local c1 = track.corners[1]
+  local mid = c1.endM + 170
+  check(teacherLap.gas[Track.cellAt(track, mid / track.lengthM)] > 0.9, 'fixture: flat out mid-straight')
+  local said = coachRun(bench, c1.endM + 150, c1.endM + 280, function(m)
+    if m > mid and m < mid + 80 then return { gas = 0 } end
+  end)
+  eq(ids(said), 'stayFlat@T2')
+  check(said[1].distM - mid < 45, 'after about half a second')
+  local exit = coachRun(bench, c1.apexM, c1.endM + 140, function(m)
+    if m > c1.endM then return { gas = 0.5 } end
+  end)
+  eq(ids(exit), 'fullThrottle@T1')
+  local twice = coachRun(bench, c1.endM + 150, c1.endM + 290, function(m)
+    if (m > mid and m < mid + 40) or m > mid + 70 then return { gas = 0 } end
+  end)
+  eq(#twice, 1, 'once per straight: ' .. ids(twice))
+end)
+test('braking for a corner the benchmark only lifts for: "no brake"', function()
+  local lap = copyLap(teacherLap)
+  local c7 = track.corners[7]
+  local from = Track.cellAt(track, (c7.startM - 200) / track.lengthM)
+  for j = 0, U.forward(from, c7.endCell, track.n) do
+    local i = U.wrapIndex(from + j, track.n)
+    lap.brake[i] = 0
+  end
+  local plan2 = Targets.build(track, lap, segs, config.targets, config.metrics)
+  eq(plan2.targets[7].brakeCell, nil, 'fixture: no brake point for T7')
+  local said = coachRun(plan2, c7.startM - 120, c7.apexM, function(m)
+    if m > c7.startM - 50 then return { brake = 0.5, gas = 0, turnCue = false } end
+    return { turnCue = false }
+  end)
+  eq(ids(said), 'noBrake@T7')
+end)
+test('off the line on the way in: "move right" / "move left"', function()
+  local function run(off, extra)
+    return coachRun(bench, T2.startM - 220, T2.startM - 15, function()
+      local o = { off = off, turnCue = false }
+      for k, v in pairs(extra or {}) do o[k] = v end
+      return o
+    end)
+  end
+  local said, gauge = run(3.2)
+  eq(ids(said), 'moveRight@T2')
+  near(gauge.offLeftM, 3.2, 0.2, 'gauge shows the offset')
+  eq(ids((run(-3.2))), 'moveLeft@T2')
+  eq(#run(1.5), 0, 'a metre and a half is close enough')
+  eq(#run(3.2, { lineCue = false }), 0, 'can be switched off')
+end)
+test('never more than the cap per corner, and silent without a benchmark', function()
+  local said = coachRun(bench, t2BrakeM - 220, T2.startM - 5, function(m, ref)
+    local o = { off = 4, turnCue = false, max = 2 }
+    if m > t2BrakeM - 100 then o.brake, o.gas, o.v = 0.7, 0, ref.v * 0.8 end
+    return o
+  end)
+  eq(#said, 2, 'three things were wrong, two were said: ' .. ids(said))
+  local live = Live.new(track, config.live)
+  live:setPlan(nil)
+  local gauge, events = live:update({ cell = 1, pos = 0, v = 100, gas = 0, brake = 1 }, 1 / 60)
+  eq(gauge.active, false)
+  eq(#events, 0)
+end)
+
+-- Lesson plan -----------------------------------------------------------------
+
+local Lesson = require('src/lesson')
+print('lesson plan')
+local LC = config.lesson
+local function res(id, lossMs, value) return { id = id, lossMs = lossMs, value = value, good = id == 'ok' or id == 'gain' } end
+
+test('picks the corner with the biggest typical loss that has a cause', function()
+  local lesson = Lesson.new(7, LC)
+  lesson:record(1, res('brakeEarly', 300, 30))
+  lesson:record(2, res('overSlow', 700, 12))
+  lesson:record(3, res('slower', 900))            -- no cause to give an instruction for
+  lesson:record(4, res('ok', 20))
+  lesson:record(5, res('throttleLate', 90, 12))   -- too small to bother with
+  local sum = lesson:lapDone(60000, true)
+  eq(sum.changed, true)
+  eq(sum.focus.k, 2)
+  eq(sum.focus.id, 'overSlow')
+  eq(sum.worstK, 3, 'the summary still names the biggest loss')
+end)
+test('one bad pass does not outweigh two good ones', function()
+  local lesson = Lesson.new(3, LC)
+  lesson:record(1, res('ok', 30))
+  lesson:record(1, res('ok', 40))
+  lesson:record(1, res('offTrack', 100))
+  lesson:record(2, res('brakeEarly', 250, 20))
+  lesson:record(2, res('brakeEarly', 260, 22))
+  lesson:record(2, res('overSlow', 240, 8))
+  local focus = lesson:choose()
+  eq(focus.k, 2)
+  eq(focus.id, 'brakeEarly', 'the cause seen most often')
+  near(focus.baseMs, 250, 0.1, 'median loss')
+end)
+test('a focus corner is worked on until it is sorted, then the next one is named', function()
+  local lesson = Lesson.new(3, LC)
+  lesson:record(1, res('brakeEarly', 800, 40))
+  lesson:record(2, res('throttleLate', 300, 20))
+  lesson:lapDone(60000, true)
+  eq(lesson.focus.k, 1)
+  local v = lesson:record(1, res('brakeEarly', 500, 25))
+  eq(v.focus, true)
+  eq(v.kind, 'better')
+  near(v.prevMs, 800, 0.1)
+  eq(lesson.focus.value, 25, 'the instruction follows the latest attempt')
+  v = lesson:record(1, res('overSlow', 250, 6))
+  eq(v.kind, 'good', 'under 40% of where it started')
+  eq(lesson:settle(1, 30000, 260, true), nil, 'one good pass is not enough')
+  v = lesson:record(1, res('brakeEarly', 600, 30))
+  eq(v.kind, 'worse')
+  eq(lesson.focus.streak, 0, 'a miss starts the count again')
+  lesson:settle(1, 30000, 600, true)
+  lesson:record(1, res('ok', 60))
+  eq(lesson:settle(1, 30000, 70, true), nil)
+  v = lesson:record(1, res('ok', 40))
+  eq(v.kind, 'good')
+  check(lesson.focus, 'not sorted until the whole segment has been driven')
+  local done = lesson:settle(1, 30000, 50, true)
+  eq(done.kind, 'fixed')
+  eq(#lesson.fixed, 1)
+  eq(lesson.fixed[1].k, 1)
+  near(done.fromMs, 800, 0.1)
+  near(done.toMs, 50, 0.1)
+  check(done.next and done.next.k == 2 and done.next.id == 'throttleLate', 'moves straight on to the next corner')
+  eq(lesson.focus, done.next)
+end)
+test('a loss that only shows on the following straight is not praised at the exit', function()
+  -- Late on the throttle: 100 ms lost by the exit, 430 ms by the end of the straight.
+  local lesson = Lesson.new(2, LC)
+  lesson:record(1, res('throttleLate', 100, 20))
+  lesson:settle(1, 30000, 430, true)
+  lesson:lapDone(60000, true)
+  eq(lesson.focus.k, 1)
+  near(lesson.focus.baseMs, 430, 0.1)
+  near(lesson.focus.baseExitMs, 100, 0.1)
+  local v = lesson:record(1, res('ok', 70))
+  check(v.kind ~= 'good', '70 ms at the exit is barely better than 100: ' .. v.kind)
+  lesson:settle(1, 30000, 380, true)
+  -- Looks sorted at the exit twice, but the second time the straight says otherwise.
+  eq(lesson:record(1, res('ok', 20)).kind, 'good')
+  eq(lesson:settle(1, 30000, 60, true), nil)
+  eq(lesson:record(1, res('ok', 25)).kind, 'good')
+  eq(lesson:settle(1, 30000, 300, true), nil, 'taken back')
+  eq(lesson.focus.streak, 0)
+  eq(#lesson.fixed, 0)
+end)
+test('a corner that will not come good is parked, and comes back later', function()
+  local lesson = Lesson.new(2, LC)
+  lesson:record(1, res('brakeEarly', 900, 40))
+  lesson:record(2, res('wide', 400, 3))
+  lesson:lapDone(60000, true)
+  eq(lesson.focus.k, 1)
+  local v
+  for _ = 1, LC.parkAfter do v = lesson:record(1, res('brakeEarly', 900, 40)) end
+  eq(v.kind, 'parked')
+  eq(lesson.focus.k, 2, 'works on something else meanwhile')
+  eq(lesson:ranking()[1].parked, true)
+  for _ = 1, LC.parkPasses do lesson:record(1, res('brakeEarly', 900, 40)) end
+  lesson.focus = nil
+  eq(lesson:choose().k, 1, 'and returns to it')
+end)
+test('brake points move in steps, not all at once', function()
+  eq(Lesson.stepM(69, LC), 25)
+  eq(Lesson.stepM(30, LC), 15)
+  eq(Lesson.stepM(12, LC), 5)
+  eq(Lesson.stepM(3, LC), 5)
+end)
+test('ideal lap, consistency, skills and training steps', function()
+  local lesson = Lesson.new(2, LC)
+  eq(lesson:ideal(), nil)
+  eq(lesson:consistency(), nil)
+  local d1 = { braking = true, brakeDiffM = 20, minDiffKmh = -6, throttleDiffM = 8, exitDiffKmh = 4, wideM = 1 }
+  local d2 = { braking = false, minDiffKmh = 1, exitDiffKmh = -2, wideM = -0.5 }
+  lesson:record(1, res('brakeEarly', 400, 20), d1)
+  lesson:record(2, res('ok', 20), d2)
+  lesson:settle(1, 30500, 450, true)
+  lesson:settle(2, 30000, 30, true)
+  lesson:settle(1, 30200, 300, true)
+  lesson:settle(1, 29000, 100, false)             -- an off-track pass is not a time you can count on
+  eq(lesson:ideal(), 60200)
+  eq(lesson.corners[1].passes[1].lossMs, 100, 'the full-segment loss replaces the one measured at the exit')
+  local skills = lesson:skills()
+  eq(skills.braking, 50, '20 m out')
+  eq(skills.speed, 85, '6 and 0 km/h slow')
+  eq(skills.line, 85, '1 m and 0.5 m off')
+  eq(skills.exits, 75, '8 m late where it was measured, 4 km/h down in one of two corners')
+  eq(skills.consistency, nil, 'not enough laps yet')
+  for _, ms in ipairs({ 61000, 60400, 60600 }) do lesson:lapDone(ms, true) end
+  local cons = lesson:consistency()
+  near(cons.spreadMs, 600, 0.1)
+  check(lesson:skills().consistency > 80)
+  local st = {}
+  for _, s in ipairs(lesson:stages()) do st[s.id] = s end
+  eq(st.clean.done, true, 'three clean laps')
+  eq(st.braking.done, false, 'the one braking corner is 20 m out')
+  eq(st.braking.need, 1)
+  eq(st.speed.have, 1, 'one of two corners within 5 km/h')
+  eq(st.exits.done, true)
+  eq(st.consistency.have, 2, '60.4 and 60.6 are within half a second, 61.0 is not')
+  eq(lesson:stage().id, 'braking', 'the first step that is still open')
+  lesson:lapDone(90000, false)
+  eq(lesson:stages()[1].done, true, 'a step stays done once reached')
+  eq(lesson.cleanStreak, 0)
+end)
+test('a new benchmark starts the corner history afresh but keeps the laps', function()
+  local lesson = Lesson.new(2, LC)
+  lesson:record(1, res('brakeEarly', 400, 20))
+  lesson:lapDone(60000, true)
+  check(lesson.focus)
+  lesson:rebase()
+  eq(lesson.focus, nil)
+  eq(#lesson:ranking(), 0)
+  eq(#lesson.lapTimes, 1)
+end)
+test('the coach turns a corner into plain numbers', function()
+  local ref = { timeMs = 5000, brakeRelM = -60, minKmh = 80, throttleRelM = 5, exitKmh = 120 }
+  local got = { timeMs = 5400, brakeRelM = -85, minKmh = 74, throttleRelM = 20, exitKmh = 113 }
+  local d = Coach.detail(ref, got, { wideM = 1.5, offTrack = false })
+  eq(d.lossMs, 400)
+  eq(d.brakeDiffM, 25)
+  eq(d.minDiffKmh, -6)
+  eq(d.throttleDiffM, 15)
+  eq(d.exitDiffKmh, 7)
+  eq(d.braking, true)
+  local lift = Coach.detail({ timeMs = 1, minKmh = 1, exitKmh = 1 }, { timeMs = 1, minKmh = 1, exitKmh = 1, brakeRelM = -5 })
+  eq(lift.braking, false)
+  eq(lift.brakeDiffM, nil)
+end)
+test('session history survives a round trip to disk', function()
+  local list = {
+    { at = 1731200000, best = 83456, bench = 80123, laps = 12, valid = 9, braking = 72, speed = 64 },
+    { at = 1731300000, best = 82990, laps = 8, valid = 8, ideal = 82500, consistency = 55.4 },
+  }
+  local back = Reference.decodeHistory(Reference.encodeHistory(list))
+  eq(#back, 2)
+  eq(back[1].best, 83456)
+  eq(back[1].braking, 72)
+  eq(back[2].bench, nil)
+  eq(back[2].consistency, 55)
+  eq(#Reference.decodeHistory('garbage'), 0)
+  eq(#Reference.decodeHistory(nil), 0)
+  local saved = {}
+  local ref = Reference.new({ dir = 'D', save = function(p, t) saved[p] = t return true end, load = function(p) return saved[p] end })
+  for i = 1, 5 do list[#list + 1] = { at = i, laps = i } end
+  check(ref:saveHistory('ks_track', 'car', list, 4))
+  eq(#ref:loadHistory('ks_track', 'car'), 4, 'only the newest are kept')
+  eq(#ref:loadHistory('other', 'car'), 0)
+end)
+
+-- Updater -----------------------------------------------------------------------
+
+local Updater = require('src/updater')
+print('updater')
+test('checksums and version numbers', function()
+  eq(Updater.checksum('Wikipedia'), 0x11E60398)
+  eq(Updater.checksum(''), 1)
+  check(Updater.newer('0.4.1', '0.4.0'))
+  check(Updater.newer('0.10.0', '0.9.9'))
+  check(Updater.newer('1.0', '0.99.99'))
+  check(not Updater.newer('0.4.0', '0.4.0'))
+  check(not Updater.newer('0.3.9', '0.4.0'))
+  check(not Updater.newer('banana', '0.4.0'))
+end)
+test('the update list round-trips, and refuses anything suspicious', function()
+  local files = { { path = 'src/app.lua', data = 'return 1\n' }, { path = 'PaceCoach.lua', data = string.rep('\0\255x', 50) } }
+  local text = Updater.encode('1.2.3', 'What is new', files)
+  local list = Updater.parse(text)
+  eq(list.version, '1.2.3')
+  eq(list.notes, 'What is new')
+  eq(#list.files, 2)
+  eq(list.files[2].size, 150)
+  eq(list.files[2].sum, Updater.checksum(files[2].data))
+  eq(Updater.parse('<html>404</html>'), nil)
+  for _, bad in ipairs({ '../evil.lua', '/etc/passwd', 'C:/x.lua', 'src\\app.lua', 'a b.lua', '.hidden', 'src//x.lua', 'src/' }) do
+    eq(Updater.parse('PACECOACH-UPDATE 1\nversion=1.0\nfile=1 00000001 ' .. bad .. '\n'), nil, 'must refuse ' .. bad)
+  end
+  eq(Updater.parse('PACECOACH-UPDATE 1\nversion=1.0\n'), nil, 'empty list')
+  eq(Updater.parse(text, { maxFiles = 1 }), nil, 'too many files')
+  eq(Updater.parse(text, { maxBytes = 100 }), nil, 'too many bytes')
+end)
+
+-- A tiny fake GitHub and a fake disk.
+local function updateWorld(version, opts)
+  opts = opts or {}
+  local base = 'https://example.test/app/'
+  local files = {
+    { path = 'PaceCoach.lua', data = 'entry ' .. version },
+    { path = 'src/app.lua', data = 'app ' .. version },
+    { path = 'sounds/deep/a.wav', data = string.rep('\0\1\2', 400) },
+  }
+  local web = { [base .. 'update.txt'] = Updater.encode(version, 'notes', files) }
+  for _, f in ipairs(files) do web[base .. f.path] = f.data end
+  local w = { web = web, saved = {}, order = {}, dirs = {}, disk = opts.disk or {}, requests = 0, base = base }
+  w.updater = Updater.new({
+    base = base, list = 'update.txt', dir = 'APP', current = '0.4.0',
+    get = function(url, cb)
+      w.requests = w.requests + 1
+      if opts.offline then cb('no network') return end
+      local body = w.web[url]
+      if body then cb(nil, 200, body) else cb(nil, 404, 'Not Found') end
+    end,
+    save = function(path, data)
+      if opts.readOnly and path:find('PaceCoach.lua', 1, true) then return false end
+      w.saved[path], w.order[#w.order + 1] = data, path
+      return true
+    end,
+    mkdir = function(path) w.dirs[#w.dirs + 1] = path end,
+    load = function(path)
+      local data = w.saved[path] or w.disk[path]
+      if data and opts.lossy then return (data:gsub('%z.*', '')) end    -- cuts at the first zero byte
+      return data
+    end,
+  })
+  return w
+end
+local function fetch(u)
+  for _ = 1, 1000 do
+    if u.state ~= 'downloading' then return end
+    u:pump()
+  end
+  error('the updater never finished')
+end
+test('a newer version is downloaded, checked, and only then installed', function()
+  local w = updateWorld('0.5.0')
+  local u = w.updater
+  eq(u.state, 'idle')
+  u:check()
+  eq(u.state, 'available')
+  eq(u.remote.version, '0.5.0')
+  eq(next(w.saved), nil)
+  check(u:install())
+  eq(u.state, 'downloading')
+  u:pump()
+  eq(u.progress, 1, 'one file per call')
+  fetch(u)
+  eq(u.state, 'ready', 'downloaded, waiting for a good moment')
+  eq(u.progress, 3)
+  eq(next(w.saved), nil, 'nothing written before apply()')
+  check(u:apply())
+  eq(u.state, 'done')
+  eq(u.installed, '0.5.0')
+  eq(w.saved['APP/src/app.lua'], 'app 0.5.0')
+  eq(#w.saved['APP/sounds/deep/a.wav'], 1200, 'binary data arrives whole')
+  eq(w.order[#w.order], 'APP/PaceCoach.lua', 'the entry file is written last')
+  eq(w.order[1], 'APP/update-check.bin', 'a write test comes before anything else')
+  eq(table.concat(w.dirs, ' '), 'APP/src APP/sounds APP/sounds/deep', 'folders are made first, parents before children')
+  eq(u:check(), false, 'nothing more to do this session')
+end)
+test('files that are already on disk unchanged are not downloaded again', function()
+  local w = updateWorld('0.5.0', { disk = {
+    ['APP/sounds/deep/a.wav'] = string.rep('\0\1\2', 400),      -- identical
+    ['APP/src/app.lua'] = 'app 0.4.0',                             -- same length, older content
+  } })
+  local u = w.updater
+  u:check()
+  u:install()
+  fetch(u)
+  eq(u.state, 'ready')
+  eq(u.skipped, 1)
+  eq(w.requests, 3, 'the list and the two files that changed')
+  check(u:apply())
+  eq(w.saved['APP/sounds/deep/a.wav'], nil, 'the unchanged file is not rewritten')
+  eq(w.saved['APP/src/app.lua'], 'app 0.5.0')
+end)
+test('the same or an older version is left alone', function()
+  local w = updateWorld('0.4.0')
+  w.updater:check()
+  eq(w.updater.state, 'current')
+  eq(w.updater:install(), false)
+  local old = updateWorld('0.3.9')
+  old.updater:check()
+  eq(old.updater.state, 'current')
+end)
+test('a damaged download changes nothing on disk', function()
+  local w = updateWorld('0.5.0')
+  w.web[w.base .. 'src/app.lua'] = 'app 0.5.X'                 -- same length, different content
+  w.updater:check()
+  w.updater:install()
+  fetch(w.updater)
+  eq(w.updater.state, 'failed')
+  check(w.updater.error:find('src/app.lua', 1, true) and w.updater.error:find('damaged', 1, true), w.updater.error)
+  eq(next(w.saved), nil)
+  eq(w.updater:apply(), false)
+  local short = updateWorld('0.5.0')
+  short.web[short.base .. 'sounds/deep/a.wav'] = 'cut off'
+  short.updater:check()
+  short.updater:install()
+  fetch(short.updater)
+  eq(short.updater.state, 'failed')
+  eq(next(short.saved), nil)
+  local missing = updateWorld('0.5.0')
+  missing.web[missing.base .. 'PaceCoach.lua'] = nil
+  missing.updater:check()
+  missing.updater:install()
+  fetch(missing.updater)
+  eq(missing.updater.state, 'failed')
+  eq(next(missing.saved), nil)
+end)
+test('a game build that damages binary files is noticed before anything is installed', function()
+  local w = updateWorld('0.5.0', { lossy = true })
+  local u = w.updater
+  u:check()
+  u:install()
+  fetch(u)
+  eq(u.state, 'ready')
+  eq(u:apply(), false)
+  eq(u.state, 'failed')
+  check(u.error:find('cannot store the files safely', 1, true), u.error)
+  eq(w.saved['APP/PaceCoach.lua'], nil)
+  eq(w.saved['APP/src/app.lua'], nil)
+  eq(w.saved['APP/sounds/deep/a.wav'], nil)
+end)
+test('no network, a broken list and a read-only folder are reported plainly', function()
+  local off = updateWorld('0.5.0', { offline = true })
+  off.updater:check()
+  eq(off.updater.state, 'failed')
+  check(off.updater.error:find('could not reach GitHub', 1, true), off.updater.error)
+  check(off.updater:check(), 'trying again is allowed')
+  local broken = updateWorld('0.5.0')
+  broken.web[broken.base .. 'update.txt'] = '<html>rate limited</html>'
+  broken.updater:check()
+  eq(broken.updater.state, 'failed')
+  local ro = updateWorld('0.5.0', { readOnly = true })
+  ro.updater:check()
+  ro.updater:install()
+  fetch(ro.updater)
+  eq(ro.updater:apply(), false)
+  eq(ro.updater.state, 'failed')
+  check(ro.updater.error:find('could not write PaceCoach.lua', 1, true), ro.updater.error)
 end)
 
 print(string.format('\n%d passed, %d failed', passed, failed))

@@ -61,4 +61,25 @@ function Coach.judge(ref, got, extra, cfg)
   return res
 end
 
+-- The same comparison as plain numbers, for the lesson plan and the skill
+-- scores. A field is nil when it cannot be measured in this corner.
+--   brakeDiffM     positive: braked earlier than the benchmark
+--   minDiffKmh     negative: slower at the slowest point
+--   throttleDiffM  positive: back on the throttle later
+--   exitDiffKmh    positive: slower at the exit
+function Coach.detail(ref, got, extra)
+  extra = extra or {}
+  local d = {
+    lossMs = got.timeMs - ref.timeMs,
+    braking = ref.brakeRelM ~= nil,
+    minDiffKmh = got.minKmh - ref.minKmh,
+    exitDiffKmh = ref.exitKmh - got.exitKmh,
+    wideM = extra.wideM,
+    offTrack = extra.offTrack == true,
+  }
+  if ref.brakeRelM and got.brakeRelM then d.brakeDiffM = ref.brakeRelM - got.brakeRelM end
+  if ref.throttleRelM and got.throttleRelM then d.throttleDiffM = got.throttleRelM - ref.throttleRelM end
+  return d
+end
+
 return Coach

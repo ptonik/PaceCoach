@@ -160,6 +160,58 @@ function Reference:loadImport(trackId, carId, n)
   return lap
 end
 
+-- Progress history: one line of numbers per session for a car + track pair.
+--   PACECOACH-HISTORY 1
+--   at=1731234567 best=83456 bench=80123 laps=12 valid=9 braking=72 ...
+function Reference:historyPath(trackId, carId)
+  return self.dir .. '/' .. U.safeName(trackId) .. '__' .. U.safeName(carId) .. '.history.txt'
+end
+
+local HISTORY_KEYS = {
+  'at', 'best', 'bench', 'laps', 'valid', 'ideal', 'fixed',
+  'braking', 'speed', 'exits', 'line', 'consistency',
+}
+
+function Reference.encodeHistory(list)
+  local out = { 'PACECOACH-HISTORY 1' }
+  for _, entry in ipairs(list) do
+    local parts = {}
+    for _, key in ipairs(HISTORY_KEYS) do
+      local v = entry[key]
+      if type(v) == 'number' and v == v then parts[#parts + 1] = key .. '=' .. string.format('%d', U.round(v)) end
+    end
+    if #parts > 0 then out[#out + 1] = table.concat(parts, ' ') end
+  end
+  return table.concat(out, '\n') .. '\n'
+end
+
+function Reference.decodeHistory(text)
+  local list = {}
+  if type(text) ~= 'string' or not text:match('^PACECOACH%-HISTORY 1') then return list end
+  local first = true
+  for line in text:gmatch('[^\r\n]+') do
+    if first then
+      first = false
+    else
+      local entry, any = {}, false
+      for key, value in line:gmatch('(%w+)=(%-?%d+)') do
+        entry[key], any = tonumber(value), true
+      end
+      if any then list[#list + 1] = entry end
+    end
+  end
+  return list
+end
+
+function Reference:loadHistory(trackId, carId)
+  return Reference.decodeHistory(self.load(self:historyPath(trackId, carId)))
+end
+
+function Reference:saveHistory(trackId, carId, list, keep)
+  while keep and #list > keep do table.remove(list, 1) end
+  return self.save(self:historyPath(trackId, carId), Reference.encodeHistory(list)) and true or false
+end
+
 -- Learned grip belongs to the car, not the track, and lives in its own small
 -- file so it can be saved often without rewriting whole laps.
 function Reference:gripPath(carId)

@@ -156,4 +156,132 @@ function Synth.drive(track, o)
   return samples, lapS * 1000
 end
 
+-- A learner: a driver with flaws that can differ from corner to corner and
+-- change from lap to lap, for testing what the coach says about them.
+--
+-- base:  { latG, brakeG, accelG, vmaxMs, hz }
+-- flaws: corner index -> {
+--   lat      scale on the grip used in this corner (0.8 = slow at the apex)
+--   brake    g used when braking for this corner (lower = earlier and softer)
+--   coastM   metres spent off both pedals after the end of the corner
+--   off      metres to the left of the line on the way in (negative = right)
+--   earlyGas true: on the throttle half way into the corner
+--   lift     true: lifts off for 40 m on the straight before the corner
+--   softBrake 0..1: pedal pressure used while arriving faster than the plan }
+-- Returns a plan for Synth.lap.
+function Synth.plan(track, base, flaws)
+  flaws = flaws or {}
+  local n, cellM, corners = track.n, track.cellM, track.corners
+  local lat, brakeG, noAccel, off, gasSet = {}, {}, {}, {}, {}
+  for i = 1, n do lat[i], brakeG[i], off[i] = 1, base.brakeG, 0 end
+  local function span(from, cells, fn)
+    for j = 0, math.max(0, cells) do fn(((from - 1 + j) % n) + 1) end
+  end
+  local function metres(m) return math.floor(m / cellM + 0.5) end
+  for k, c in ipairs(corners) do
+    local f = flaws[k] or {}
+    local prev = corners[((k - 2) % #corners) + 1]
+    span(c.startCell, (c.endCell - c.startCell) % n, function(i) lat[i] = f.lat or 1 end)
+    local zone = (#corners > 1) and ((c.apexCell - prev.apexCell) % n) or n
+    span(((c.apexCell - zone) % n) + 1, zone - 1, function(i) brakeG[i] = f.brake or base.brakeG end)
+    if f.coastM then
+      -- Off the throttle all the way through, and still off it this far past the exit.
+      span(c.startCell, (c.endCell - c.startCell) % n, function(i) gasSet[i] = 0 end)
+      span(c.endCell, metres(f.coastM), function(i) noAccel[i], gasSet[i] = true, 0 end)
+    end
+    if f.off then
+      local room = (#corners > 1) and ((c.startCell - prev.endCell) % n) * cellM or 200
+      local len = math.min(140, room - 30)
+      if len > 20 then
+        span(((c.startCell - metres(len) - 1) % n) + 1, metres(len - 6), function(i) off[i] = f.off end)
+      end
+    end
+    if f.earlyGas then
+      span(c.startCell, math.floor(((c.apexCell - c.startCell) % n) * 0.8), function(i) gasSet[i] = 0.75 end)
+    end
+    if f.lift then
+      span(((c.startCell - metres(f.liftAtM or 230) - 1) % n) + 1, metres(40), function(i) gasSet[i] = 0 end)
+    end
+  end
+  local v = {}
+  for i = 1, n do
+    local kappa = math.abs(track.curv[i])
+    v[i] = base.vmaxMs
+    if kappa > 1e-4 then v[i] = math.min(base.vmaxMs, math.sqrt(base.latG * lat[i] * G / kappa)) end
+  end
+  for _ = 1, 2 do
+    for j = n, 1, -1 do
+      local nxt = (j % n) + 1
+      v[j] = math.min(v[j], math.sqrt(v[nxt] ^ 2 + 2 * brakeG[j] * G * track.ds[j]))
+    end
+    for j = 1, n do
+      local nxt = (j % n) + 1
+      local reach = noAccel[j] and v[j] or math.sqrt(v[j] ^ 2 + 2 * base.accelG * G * track.ds[j])
+      v[nxt] = math.min(v[nxt], reach)
+    end
+  end
+  return { v = v, off = off, gasSet = gasSet, brakeG = brakeG, base = base }
+end
+
+-- Advances the learner by one frame and returns the sample.
+-- st carries distance, time and lap count: start with {}. Changing the plan
+-- between frames is allowed; the speed blends over to the new one in a second.
+function Synth.step(track, plan, st)
+  local n, length, base = track.n, track.lengthM, plan.base
+  local dt = 1 / (base.hz or 60)
+  if not st.xs then
+    st.xs, st.zs = {}, {}
+    for i = 1, n do st.xs[i], st.zs[i] = track.points[i].x, track.points[i].z end
+    st.dist, st.t, st.lapCount = st.dist or 0, st.t or 0, st.lapCount or 0
+  end
+  if st.plan ~= plan then
+    st.old, st.blend = st.plan, st.plan and 0 or 1
+    st.plan = plan
+  end
+  local f = st.dist / length * n
+  local cell = (math.floor(f) % n) + 1
+  local speed, ahead = at(plan.v, f, n), at(plan.v, f + 2, n)
+  if st.blend < 1 then
+    local w = st.blend
+    speed = at(st.old.v, f, n) * (1 - w) + speed * w
+    ahead = at(st.old.v, f + 2, n) * (1 - w) + ahead * w
+    st.blend = math.min(1, st.blend + dt)
+  end
+  local accel = (ahead - speed) / (2 * track.cellM) * speed
+  local gas, brake = 0.4, 0
+  if accel > 0.3 then
+    gas = math.min(1, accel / (base.accelG * G))
+  elseif accel < -0.5 then
+    gas, brake = 0, math.min(1, -accel / (plan.brakeG[cell] * G))
+  end
+  if plan.gasSet[cell] and brake == 0 then gas = plan.gasSet[cell] end
+  local kappa = at(track.curv, f, n)
+  local sample = {
+    pos = st.dist / length, t = st.t * 1000, lapCount = st.lapCount, dt = dt,
+    v = speed * 3.6, speedMs = speed, gas = gas, brake = brake,
+    steer = math.deg(math.atan(2.6 * kappa)) * 12,
+    gear = math.min(6, 1 + math.floor(speed * 3.6 / 45)),
+    x = at(st.xs, f, n), z = at(st.zs, f, n), offLeftM = plan.off[cell],
+  }
+  local move = speed * dt
+  st.dist, st.t = st.dist + move, st.t + dt
+  if st.dist >= length then
+    st.dist = st.dist - length
+    st.lastLapMs = (st.t - st.dist / speed) * 1000
+    st.t = st.dist / speed
+    st.lapCount = st.lapCount + 1
+  end
+  return sample
+end
+
+-- Drives one lap of a plan, from the start line to the start line.
+function Synth.lap(track, plan, st)
+  local samples = {}
+  local lap = st.lapCount or 0
+  repeat
+    samples[#samples + 1] = Synth.step(track, plan, st)
+  until st.lapCount ~= lap
+  return samples
+end
+
 return Synth

@@ -21,6 +21,14 @@ Settings.defaults = {
   throttleSound = true, -- say "throttle" when you are late back on the power
   line3d = true,        -- driving line on the track (needs a benchmark lap)
   ghostPedals = true,   -- your pedals beside the benchmark's (advanced HUD)
+  liveCoach = true,     -- coaching while you drive: brake harder, ease off, wait...
+  turnCue = true,       -- say "turn in" at the benchmark's turn-in point
+  lineCue = true,       -- say "move left / right" when off the line before a corner
+  lessons = true,       -- pick a focus corner and remind you of it
+  praise = true,        -- say so when a corner goes well
+  paceBar = true,       -- speed against the benchmark, right now
+  autoCheck = true,     -- look for a new version when the app starts
+  autoInstall = true,   -- download and install it without asking
 }
 
 function Settings.load()

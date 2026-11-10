@@ -40,8 +40,9 @@ local AC_ESSENTIAL = { 'getCar', 'getSim' }
 local AC_OPTIONAL = {
   'trackProgressToWorldCoordinate', 'hasTrackSpline', 'getTrackFullID', 'getTrackID',
   'getCarID', 'getFolder', 'FolderID', 'storage', 'AudioEvent', 'onCarJumped',
-  'onSessionStart', 'log', 'getTrackAISplineSides',
+  'onSessionStart', 'log', 'getTrackAISplineSides', 'unloadApp',
 }
+local WEB_OPTIONAL = { 'get' }
 local RENDER_OPTIONAL = { 'quad', 'setBlendMode', 'setDepthMode', 'BlendMode', 'DepthMode' }
 local IO_OPTIONAL = { 'save', 'load', 'createDir' }
 local UI_ESSENTIAL = {
@@ -76,6 +77,7 @@ function Sim.selfTest()
   row('vec3', type(vec3) ~= 'nil', false)
   local renderLib = rawget(_G, 'render')
   group('render.', renderLib, RENDER_OPTIONAL, false)
+  group('web.', rawget(_G, 'web'), WEB_OPTIONAL, false)
   if has['render.BlendMode'] then
     row('render.BlendMode.AlphaBlend', (field(renderLib.BlendMode, 'AlphaBlend')), false)
   end
@@ -298,6 +300,51 @@ function Sim.loadFile(path)
   if not Sim.has['io.load'] then return nil end
   local ok, text = pcall(io.load, path)
   if ok and type(text) == 'string' and text ~= '' then return text end
+  return nil
+end
+
+-- Updates -------------------------------------------------------------------
+
+-- Starts a download. callback(err, status, body) is called later.
+-- Returns false when this CSP build cannot download at all.
+function Sim.httpGet(url, callback)
+  if not Sim.has['web.get'] then return false end
+  local ok = pcall(web.get, url, function(err, response)
+    local status, body
+    if response ~= nil then
+      pcall(function() status, body = response.status, response.body end)
+    end
+    if err == nil and status == nil then err = 'no response' end
+    -- This runs outside the app's own error boundary, so it gets one here.
+    local okCall, why = pcall(callback, err, tonumber(status), body)
+    if not okCall then Sim.log('download handler failed: ' .. tostring(why)) end
+  end)
+  return ok
+end
+
+function Sim.makeDir(path)
+  if Sim.has['io.createDir'] then pcall(io.createDir, path) end
+end
+
+-- Unloads the app, so that CSP loads it afresh (with new files) the next
+-- time one of its windows is opened. Returns false if that is not possible.
+function Sim.unloadApp()
+  if not Sim.has['ac.unloadApp'] then return false end
+  return (pcall(ac.unloadApp))
+end
+
+-- Seconds since 1970, for the progress history. nil if the clock is not there.
+function Sim.now()
+  local ok, t = pcall(os.time)
+  if ok and type(t) == 'number' then return t end
+  return nil
+end
+
+-- "2026-11-10" for a time from Sim.now(), or nil.
+function Sim.dateText(at)
+  if type(at) ~= 'number' then return nil end
+  local ok, text = pcall(os.date, '%Y-%m-%d', at)
+  if ok and type(text) == 'string' then return text end
   return nil
 end
 

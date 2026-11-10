@@ -36,6 +36,8 @@ function Pilot:reset()
   self.cueKind = nil
   self.lastCell = nil
   self.recued = false
+  self.cueFor, self.cueN, self.brakeCueT = nil, 0, nil
+  self.lastBestD = nil
 end
 
 -- Call after the driver has recovered from a spin or an excursion: the corner
@@ -100,10 +102,13 @@ function Pilot:update(pos, speedMs, dt, opts)
     local d = U.forward(cell, c.apexCell, n)
     if not bestD or d < bestD then best, bestD = i, d end
   end
-  if self.target ~= best then
+  if self.target ~= best or (self.lastBestD and bestD > self.lastBestD + 2) then
+    -- An apex has just been passed.
     if self.target then self.announced[self.target] = nil end
+    if self.cueFor == self.target then self.cueFor = nil end
     self.target = best
   end
+  self.lastBestD = bestD
   local c = corners[best]
   local startD = U.forward(cell, c.startCell, n)
   local inCorner = startD > bestD
@@ -179,8 +184,18 @@ function Pilot:update(pos, speedMs, dt, opts)
   local lead = cfg.reactionS + ((opts and opts.leadS) or 0)
   local needNow = kind ~= nil and distBrakeM <= v * lead
   if self.cueT then self.cueT = self.cueT + dt end
-  if active and needNow and self.armed then
+  if self.brakeCueT then self.brakeCueT = self.brakeCueT + dt end
+  -- Someone who is already slowing down does not need to be told to.
+  local pedalBrake, pedalGas = (opts and opts.brake) or 0, (opts and opts.gas) or 1
+  local already = pedalBrake >= cfg.brakingOn or (kind == 'lift' and pedalGas < cfg.liftedGas)
+  local repeatOk = self.cueFor ~= governIdx
+    or (self.cueN < cfg.maxBrakeCues and (self.brakeCueT or math.huge) >= cfg.brakeCueGapS)
+  if active and needNow and self.armed and not already and repeatOk then
     self.armed = false
+    self.belowT = 0
+    if self.cueFor ~= governIdx then self.cueFor, self.cueN = governIdx, 0 end
+    self.cueN = self.cueN + 1
+    self.brakeCueT = 0
     self.cueT, self.cueKind = 0, kind
     events[#events + 1] = { kind = kind, corner = corners[governIdx] }
   elseif plan.fixed and active and kind == 'brake' and not self.armed and not self.recued
@@ -214,7 +229,7 @@ function Pilot:update(pos, speedMs, dt, opts)
   self.lastCell = cell
 
   local cue
-  if needNow then
+  if needNow and (not already or v > env[cell]) then
     cue = kind
   elseif self.cueT and self.cueT < cfg.cueHoldS then
     cue = self.cueKind

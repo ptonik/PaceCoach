@@ -2,3 +2,5 @@
 Thumbs.db
 *.svg.png
 /data/
+/dist/
+/docs/replay.html

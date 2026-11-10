@@ -1,5 +1,6 @@
--- The panel you open in the pits: track map and corner list, laps, mistakes,
--- settings, and diagnostics (including the API self-test).
+-- The panel you open in the pits: the coach's lesson plan and your numbers,
+-- track map and corner list, teacher, laps, mistakes, settings, and
+-- diagnostics (including the API self-test).
 
 local G = require('src/gfx')
 local S = require('src/strings')
@@ -9,9 +10,11 @@ local Map = require('src/map')
 local Voice = require('src/voice')
 local Mistakes = require('src/mistakes')
 local Markers = require('src/markers')
+local config = require('src/config')
 
-local Panel = { tab = 'Track' }
-local TABS = { 'Track', 'Teacher', 'Laps', 'Mistakes', 'Settings', 'Diagnostics' }
+local Panel = { tab = 'Coach' }
+local TABS = { 'Coach', 'Track', 'Teacher', 'Laps', 'Mistakes', 'Settings', 'Diagnostics' }
+Panel.TABS = TABS
 local C = G.colors
 
 local REASONS = {
@@ -79,6 +82,162 @@ end
 local function gearText(gear)
   return S.gears[(tonumber(gear) or 0) + 2] or tostring(gear)
 end
+
+-- 0..100 as a ten-step bar made of plain characters (any font can draw it).
+local function bar(value)
+  local filled = U.round(U.clamp(value, 0, 100) / 10)
+  return '[' .. string.rep('#', filled) .. string.rep('.', 10 - filled) .. ']'
+end
+
+local function historyLine(index, entry, previous)
+  local parts = { 'Session ' .. index }
+  local date = Sim.dateText(entry.at)
+  if date then parts[#parts + 1] = date end
+  if entry.best then
+    local text = 'best ' .. U.formatLap(entry.best)
+    if previous and previous.best then
+      text = text .. ' (' .. U.formatDelta(entry.best - previous.best) .. ')'
+    end
+    parts[#parts + 1] = text
+  end
+  if entry.best and entry.bench then
+    parts[#parts + 1] = U.formatDelta(entry.best - entry.bench) .. ' s to the benchmark'
+  end
+  if entry.laps then
+    parts[#parts + 1] = string.format('%d laps, %d clean', entry.laps, entry.valid or 0)
+  end
+  return table.concat(parts, '   ')
+end
+
+local function coachTab(app, W)
+  local lesson = app.lesson
+  if app.state == 'noline' then
+    paragraph(S.status.noLine, W)
+    return
+  end
+  if not (app.track and lesson) then
+    ui.text(S.status.loading)
+    return
+  end
+  local corners = app.track.corners
+
+  if not app.coachPlan then
+    line('No lesson plan yet.', C.orange)
+    paragraph(S.lesson.noBenchmark, W)
+    paragraph('The quickest way: start a session with one to three AI opponents in the same car as you. '
+      .. 'After a lap or two of theirs the coach has a teacher lap and starts working with you.', W)
+  else
+    line('Coaching against ' .. (S.who[app.coachLabel] or 'the benchmark')
+      .. '   ' .. U.formatLap(app.coachPlan.lap.timeMs), C.green)
+    gap()
+    line(S.lesson.focusTitle, C.dim)
+    local f = lesson.focus
+    if not app.settings.lessons then
+      ui.text('Switched off in Settings.')
+    elseif f and corners[f.k] then
+      local c = corners[f.k]
+      line(string.format('%s  %s %s   typically %s s', c.name, S.severityLower[c.severity],
+        S.dirLower[c.dir], U.formatDelta(f.baseMs)), C.cyan)
+      paragraph(app.remedyText(f.id, f.value) or '', W)
+      ui.text(string.format('Attempts: %d   good in a row: %d of %d', f.tries, f.streak,
+        config.lesson.masterStreak))
+    else
+      paragraph(S.lesson.none, W)
+    end
+    if #lesson.fixed > 0 then
+      local parts = {}
+      for _, done in ipairs(lesson.fixed) do
+        parts[#parts + 1] = string.format('%s (%s to %s s)', corners[done.k] and corners[done.k].name or '?',
+          U.formatDelta(done.fromMs), U.formatDelta(done.toMs))
+      end
+      line('Fixed this session: ' .. table.concat(parts, ', '), C.green)
+    end
+    gap()
+
+    line('Training steps', C.dim)
+    for i, st in ipairs(lesson:stages()) do
+      local def = S.stage[st.id]
+      line(string.format('%s %d. %s   %s', st.done and '[x]' or '[ ]', i, def.name,
+        string.format(def.line, st.have, st.need)), st.done and C.green or C.white)
+    end
+    gap()
+
+    line('Skills, against ' .. (S.who[app.coachLabel] or 'the benchmark'), C.dim)
+    local skills = lesson:skills()
+    for _, id in ipairs(S.skills.order) do
+      if skills[id] then
+        ui.text(string.format('%s  %d   %s', bar(skills[id]), skills[id], S.skills[id]))
+      else
+        line('[..........]  --   ' .. S.skills[id], C.faint)
+      end
+    end
+    gap()
+
+    local ideal = lesson:ideal()
+    if ideal then
+      local text = S.lesson.ideal .. '  ' .. U.formatLap(ideal)
+      if app.best then text = text .. '   ' .. U.formatDelta(ideal - app.best.timeMs) .. ' s to your best' end
+      ui.text(text)
+      line('(' .. S.lesson.idealWhy .. ')', C.dim)
+    end
+    local cons = lesson:consistency()
+    if cons then
+      ui.text(string.format('Last %d clean laps: %.2f s between fastest and slowest', cons.laps, cons.spreadMs / 1000))
+    end
+    if ideal or cons then gap() end
+
+    line('Where the time goes (typical loss, biggest first)', C.dim)
+    local rows = lesson:ranking()
+    if #rows == 0 then line('Nothing driven yet.', C.faint) end
+    for _, row in ipairs(rows) do
+      local c = corners[row.k]
+      local cause = row.id and S.remedy[row.id] and S.remedy[row.id].short or 'fine'
+      local color = C.white
+      if f and f.k == row.k then
+        color = C.cyan
+      elseif row.typicalMs < config.lesson.minFocusMs then
+        color = C.green
+      end
+      line(string.format('%s   %s s   %s   (last %s, best %s, %d passes)', c and c.name or '?',
+        U.formatDelta(row.typicalMs), cause, U.formatDelta(row.lastMs), U.formatDelta(row.bestMs), row.passes),
+        color)
+    end
+    local said = {}
+    for id, count in pairs(app.liveCounts) do
+      said[#said + 1] = string.format('%s x%d', S.live[id].text:lower(), count)
+    end
+    if #said > 0 then
+      table.sort(said)
+      gap()
+      line('Said while you drove', C.dim)
+      paragraph(table.concat(said, ', '), W)
+    end
+  end
+
+  gap()
+  line('Sessions with this car and track', C.dim)
+  local history = app.history
+  if #history == 0 then
+    line('This is the first one.', C.faint)
+  else
+    for i = math.max(1, #history - 7), #history do
+      ui.text(historyLine(i, history[i], history[i - 1]))
+    end
+  end
+end
+
+local function updateStatus(app)
+  local u = app.updater
+  if not u then return S.update.idle end
+  local state = u.state
+  if state == 'idle' then return app.settings.autoCheck and S.update.idle or S.update.off end
+  if state == 'available' then return string.format(S.update.available, u.remote.version) end
+  if state == 'downloading' then return string.format(S.update.downloading, math.min(u.progress + 1, u.total), u.total) end
+  if state == 'done' then return string.format(S.update.done, tostring(u.installed)) end
+  if state == 'failed' then return string.format(S.update.failed, tostring(u.error)) end
+  return S.update[state] or state
+end
+Panel.updateStatus = updateStatus
 
 local function teacherTab(app, W)
   local label, bench = app.benchLabel, app.benchmark
@@ -217,6 +376,11 @@ local function settingsTab(app, W)
   toggle(app, 'brakeSound', 'Sound at the brake cue')
   toggle(app, 'brakeBeep', 'Use a beep instead of the word "brake"')
   toggle(app, 'throttleSound', 'Say "throttle" when I am late back on the power')
+  toggle(app, 'liveCoach', 'Live coaching while I drive (brake harder, ease off, wait...)')
+  toggle(app, 'turnCue', 'Say "turn in" at the turn-in point')
+  toggle(app, 'lineCue', 'Say "move left / right" when I am off the line before a corner')
+  toggle(app, 'lessons', 'Focus corner: one thing to fix at a time')
+  toggle(app, 'praise', 'Tell me when a corner goes well')
   slider(app, 'voiceVolume', '##pacecoachVolume', 0, 100, 100, 'Volume: %.0f%%')
   slider(app, 'leadS', '##pacecoachLead', 0, 1, 1, 'Brake cue earlier by: %.2f s')
   slider(app, 'callLeadS', '##pacecoachCall', 2, 6, 1, 'Call corners %.1f s before braking')
@@ -226,10 +390,28 @@ local function settingsTab(app, W)
   gap()
   toggle(app, 'line3d', 'Driving line on the track (needs a benchmark lap)')
   toggle(app, 'ghostPedals', 'Pedal bars on the advanced HUD')
+  toggle(app, 'paceBar', 'Speed bar against the benchmark')
   gap()
   toggle(app, 'gamepad', 'I use a gamepad, not a wheel')
   toggle(app, 'mph', 'Speeds in mph')
   toggle(app, 'swapLR', 'Swap left and right (only if callouts are mirrored)')
+  gap()
+  line('Updates', C.dim)
+  toggle(app, 'autoCheck', 'Look for a new version when the app starts')
+  toggle(app, 'autoInstall', 'Download and install new versions without asking')
+  local u = app.updater
+  ui.text('Installed: ' .. tostring(app.version) .. '   ' .. updateStatus(app))
+  if u and not Sim.has['web.get'] then
+    line(S.update.noWeb, C.orange)
+  elseif u and Sim.has['ui.button'] then
+    if (u.state == 'idle' or u.state == 'current' or u.state == 'failed') and ui.button('Check for updates') then
+      u:check()
+    end
+    if u.state == 'available' and ui.button('Update now') then u:install() end
+    if u.state == 'done' and Sim.has['ac.unloadApp'] and ui.button('Reload PaceCoach now') then
+      Sim.unloadApp()
+    end
+  end
   gap()
   if not app.settingsPersist then
     line('Settings cannot be saved on this CSP build; they reset each session.', C.orange)
@@ -257,7 +439,10 @@ local function diagnosticsTab(app, W)
     ui.text(string.format('Grip estimate: lateral %.2f / %.2f / %.2f / %.2f g, braking %.2f g',
       g.lat[1], g.lat[2], g.lat[3], g.lat[4], g.brake))
   end
-  ui.text('Voice: ' .. tostring(Voice.status) .. '   clips played: ' .. tostring(Voice.played))
+  ui.text('Voice: ' .. tostring(Voice.status) .. '   clips played: ' .. tostring(Voice.played)
+    .. (Voice.missing and ('   missing clip: ' .. Voice.missing) or ''))
+  ui.text('Live coach: ' .. ((app.gauge and app.gauge.active) and 'comparing with ' .. tostring(app.coachLabel)
+    or 'waiting for a benchmark lap') .. '   update: ' .. updateStatus(app))
   ui.text(string.format('Other cars of this model: %d   benchmark: %s   line on track: %s',
     #app.others, tostring(app.benchLabel or 'none'), tostring(Markers.status)))
   ui.text('Lap file: ' .. tostring(app.lastSave or 'nothing saved yet'))
@@ -314,7 +499,9 @@ function Panel.draw(app)
   end
   local tab = Panel.tab
   if app.state == 'init' or app.state == 'incompatible' then tab = 'Diagnostics' end
-  if tab == 'Track' then
+  if tab == 'Coach' then
+    coachTab(app, W)
+  elseif tab == 'Track' then
     trackTab(app, W)
   elseif tab == 'Teacher' then
     teacherTab(app, W)

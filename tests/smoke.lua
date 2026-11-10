@@ -52,7 +52,7 @@ local function drive(extra)
 end
 local threeLaps, trueLapMs = drive({ laps = 3 })
 
-local TABS = { 'Track', 'Teacher', 'Laps', 'Mistakes', 'Settings', 'Diagnostics' }
+local TABS = { 'Coach', 'Track', 'Teacher', 'Laps', 'Mistakes', 'Settings', 'Diagnostics' }
 local SIZES = { { 460, 260 }, { 300, 200 }, { 900, 500 }, { 380, 380 } }
 
 -- Starts a fresh session of the app. Returns the app and the fake's state.
@@ -184,7 +184,7 @@ end)
 test('an old CSP with every optional feature missing still works', function()
   local app, state = session({ remove = {
     'ac.hasTrackSpline', 'ac.getTrackFullID', 'ac.getFolder', 'ac.FolderID', 'ac.storage',
-    'ac.AudioEvent', 'ac.onCarJumped', 'ac.onSessionStart', 'ac.log',
+    'ac.AudioEvent', 'ac.onCarJumped', 'ac.onSessionStart', 'ac.log', 'ac.unloadApp', 'web',
     'io.save', 'io.load', 'io.createDir',
     'ui.measureDWriteText', 'ui.drawCircleFilled', 'ui.pathClear', 'ui.pathLineTo', 'ui.pathStroke',
     'ui.textColored', 'ui.button', 'ui.sameLine', 'ui.checkbox', 'ui.slider', 'ui.separator',
@@ -550,9 +550,231 @@ test('the folder name GitHub gives a downloaded zip still starts the app', funct
   eq(package.loaded['src/app'].state, 'ready')
 end)
 
+-- Stage 3: the live coach, the lesson plan, history and updates -----------------
+
+local Story = require('story')
+local Updater = require('src/updater')
+local S = require('src/strings')
+local lessonStore = Story.storeWithTeacher(world)
+
+print('live coach and lesson plan')
+test('a learner who does what the coach says gets faster, corner by corner', function()
+  local panel
+  local app, state, laps = Story.run({
+    world = world, store = lessonStore, laps = 8, allWindows = true,
+    onFrame = function(_, st)
+      panel = panel or package.loaded['src/panel']
+      panel.tab = 'Coach'
+      st.window.x, st.window.y = 460, 380
+    end,
+  })
+  noErrors(app, state)
+  eq(#laps, 8)
+  check(laps[8] < laps[1] - 1500, string.format('lap 1 %.2f s, lap 8 %.2f s', laps[1] / 1000, laps[8] / 1000))
+  check(#app.lesson.fixed >= 3, 'corners sorted: ' .. #app.lesson.fixed)
+  local seen = {}
+  for _, done in ipairs(app.lesson.fixed) do
+    check(not seen[done.k], 'the same corner is not "sorted" twice in a row')
+    seen[done.k] = true
+    check(done.toMs < done.fromMs * 0.5, 'T' .. done.k .. ' really improved')
+  end
+
+  for _, text in ipairs({ 'TOO EARLY', 'EASE OFF', 'TURN IN', 'FULL THROTTLE', 'MOVE RIGHT', 'FOCUS',
+      'vs teacher', 'Sorted. Well done.', 'That is it.', 'Brake about 25 m later.', 'Next lap, ',
+      'Coaching against the teacher', 'Training steps', 'Where the time goes', 'Skills, against the teacher',
+      'Ideal lap', 'Said while you drove', 'This is the first one.' }) do
+    check(sawText(state, text), 'never shown: ' .. text)
+  end
+  local played = {}
+  for _, p in ipairs(state.plays) do played[p.clip] = (played[p.clip] or 0) + 1 end
+  for _, clip in ipairs({ 'too_early', 'ease_off', 'turn_in', 'full_throttle', 'fixed', 'thats_it',
+      'tip_brake_later', 'tip_more_speed', 'best_lap' }) do
+    check(played[clip], 'never spoken: ' .. clip)
+  end
+  -- The co-driver must never stutter: no two "brake" calls within a second.
+  local lastBrake
+  for _, p in ipairs(state.plays) do
+    if p.clip == 'brake' then
+      check(not lastBrake or p.frame - lastBrake > 60, 'two "brake" calls ' .. (p.frame - (lastBrake or 0)) .. ' frames apart')
+      lastBrake = p.frame
+    end
+  end
+  check((played.brake or 0) <= 8 * #world.corners, 'brake calls: ' .. tostring(played.brake))
+
+  local skills = app.lesson:skills()
+  check(skills.braking and skills.braking >= 80, 'braking score after eight laps: ' .. tostring(skills.braking))
+  check(app.lesson:ideal(), 'ideal lap known')
+  check(app.lesson:ideal() <= app.best.timeMs + 1, 'the ideal lap is never slower than the best lap')
+  local history = Reference.decodeHistory(lessonStore[COMBO .. '.history.txt'])
+  eq(#history, 1, 'one line for this session')
+  eq(history[1].laps, #app.laps)
+  near(history[1].best, app.best.timeMs, 1)
+  check(history[1].bench and history[1].braking, 'benchmark time and skills are kept')
+end)
+
+test('the next session remembers the last one and starts a new line', function()
+  local app, state = session({ store = lessonStore })
+  local panel = package.loaded['src/panel']
+  state.lockTab = true
+  panel.tab = 'Coach'
+  run(app, state, driveAs(SLOW, { laps = 1.2 }))
+  noErrors(app, state)
+  eq(#app.history, 2)
+  check(sawText(state, 'Session 1'), 'the earlier session is listed')
+  check(sawText(state, 'laps, '), 'with its lap count')
+  eq(#Reference.decodeHistory(lessonStore[COMBO .. '.history.txt']), 2)
+end)
+
+test('without any benchmark the coach explains how to get one', function()
+  local app, state = session()
+  local panel = package.loaded['src/panel']
+  state.lockTab = true
+  panel.tab = 'Coach'
+  run(app, state, drive({ laps = 0.4 }))
+  noErrors(app, state)
+  check(sawText(state, 'No lesson plan yet.'), 'says so')
+  eq(app.gauge, nil, 'no live comparison without a lap to compare with')
+end)
+
+test('live coaching can be switched off, piece by piece', function()
+  local app, state = session({ store = lessonStore })
+  local quietAfter
+  run(app, state, driveAs(SLOW, { laps = 2.2 }), function(i, s)
+    if s.lapCount >= 1 and not quietAfter then
+      quietAfter = #state.plays
+      app.settings.liveCoach, app.settings.lessons, app.settings.praise = false, false, false
+    end
+  end)
+  noErrors(app, state)
+  check(quietAfter and quietAfter > 0)
+  local live = {}
+  for _, def in pairs(S.live) do live[def.clip] = true end
+  for _, def in pairs(S.remedy) do live[def.clip] = true end
+  local before = 0
+  for i, p in ipairs(state.plays) do
+    if live[p.clip] then
+      if i <= quietAfter then before = before + 1 else error('spoke "' .. p.clip .. '" after being switched off') end
+    end
+  end
+  check(before > 0, 'it did speak while it was on')
+  check(app.gauge and app.gauge.active, 'the speed bar keeps working')
+end)
+
+print('updates')
+local function site(version)
+  local base = config.update.base
+  local files = {
+    { path = 'PaceCoach.lua', data = '-- entry ' .. version },
+    { path = 'src/config.lua', data = '-- config ' .. version },
+    { path = 'sounds/new_clip.wav', data = string.rep('\0\7\255', 300) },
+  }
+  local web = { [base .. config.update.manifest] = Updater.encode(version, 'test', files) }
+  for _, f in ipairs(files) do web[base .. f.path] = f.data end
+  return web
+end
+local function idle(app, state, seconds, extra)
+  local s = threeLaps[1]
+  for i = 1, math.floor(seconds * 60) do
+    state.frame = (state.frame or 0) + 1
+    Fake.drive(s, extra or { speedKmh = 0, isInPit = true })
+    script.update(1 / 60)
+    script.windowMain(1 / 60)
+    script.windowPanel(1 / 60)
+    if app.lastError then error('app error: ' .. app.lastError, 2) end
+  end
+end
+
+test('a newer version on GitHub is fetched and installed by itself', function()
+  local app, state = session({ web = site('9.9.9') })
+  idle(app, state, 4)
+  eq(#state.requests, 0, 'it leaves the first seconds alone')
+  idle(app, state, 3)
+  eq(app.updater.state, 'done')
+  eq(state.store[root .. '/PaceCoach.lua'], '-- entry 9.9.9')
+  eq(state.store[root .. '/src/config.lua'], '-- config 9.9.9')
+  eq(#state.store[root .. '/sounds/new_clip.wav'], 900)
+  eq(#state.requests, 4, 'the list and three files')
+  check(sawText(state, 'PaceCoach 9.9.9 installed'), 'and says so')
+  noErrors(app, state)
+end)
+
+test('at speed the update waits until the car stands still', function()
+  local app, state = session({ web = site('9.9.9') })
+  run(app, state, drive({ laps = 0.5 }))
+  eq(app.updater.state, 'ready', 'downloaded while driving')
+  eq(state.store[root .. '/PaceCoach.lua'], nil, 'but not written at speed')
+  idle(app, state, 0.2)
+  eq(app.updater.state, 'done')
+  eq(state.store[root .. '/PaceCoach.lua'], '-- entry 9.9.9')
+end)
+
+test('with automatic installing switched off it asks first', function()
+  local app, state = session({ web = site('9.9.9') })
+  local panel = package.loaded['src/panel']
+  idle(app, state, 1)
+  app.settings.autoInstall = false
+  panel.tab = 'Settings'
+  idle(app, state, 6)
+  eq(app.updater.state, 'available')
+  check(sawText(state, 'PaceCoach 9.9.9 is available'), 'a note appears')
+  check(sawText(state, 'Version 9.9.9 is available.'), 'and the Settings tab shows it')
+  eq(state.store[root .. '/PaceCoach.lua'], nil)
+  state.click = 'Update now'
+  idle(app, state, 1)
+  eq(state.click, nil, 'the button was there')
+  eq(app.updater.state, 'done')
+  state.click = 'Reload PaceCoach now'
+  idle(app, state, 0.1)
+  eq(state.unloaded, 1, 'the app asks CSP to unload it')
+end)
+
+test('nothing new, no connection, or no download support: all quiet', function()
+  local app, state = session({ web = site(config.version) })
+  idle(app, state, 7)
+  eq(app.updater.state, 'current')
+  eq(#state.requests, 1)
+  noErrors(app, state)
+
+  app, state = session({ web = site('9.9.9') })
+  state.offline = true
+  idle(app, state, 7)
+  eq(app.updater.state, 'failed')
+  eq(app.lastError, nil)
+  check(sawText(state, 'could not reach GitHub') == false, 'not shouted on the HUD')
+
+  app, state = session({ web = site('9.9.9') })
+  idle(app, state, 1)
+  app.settings.autoCheck = false
+  idle(app, state, 7)
+  eq(#state.requests, 0, 'switched off means no request at all')
+
+  app, state = session({ web = site('9.9.9'), remove = { 'web' } })
+  package.loaded['src/panel'].tab = 'Settings'
+  idle(app, state, 7)
+  eq(app.updater.state, 'idle')
+  check(sawText(state, 'cannot download files'), 'the Settings tab explains')
+  eq(app.lastError, nil)
+end)
+
+test('the update list in the repository matches the files on disk', function()
+  local make = dofile(root .. '/tools/make_update.lua')
+  local notes, onDisk = make.currentNotes()
+  check(onDisk, 'update.txt is missing: run  luajit tools/make_update.lua "what is new"')
+  local fresh = make.build(notes)
+  check(fresh == onDisk, 'update.txt is out of date: run  luajit tools/make_update.lua')
+  local list = Updater.parse(onDisk, config.update)
+  check(list, 'the list must be acceptable to the updater itself')
+  eq(list.version, config.version)
+  local manifest = Fake.realIo.open(root .. '/manifest.ini'):read('*a')
+  eq(manifest:match('VERSION = ([%d.]+)'), config.version, 'manifest.ini and config.lua agree on the version')
+end)
+
 test('every clip the app can ask for exists on disk', function()
   local index = dofile(root .. '/sounds/index.lua')
-  local want = { 'brake', 'beep', 'best_lap', 'then_left', 'then_right', 'throttle', 'teacher_ready' }
+  local want = { 'brake', 'beep', 'best_lap', 'then_left', 'then_right', 'throttle', 'teacher_ready',
+    'good', 'nice', 'better', 'thats_it', 'fixed' }
+  for _, def in pairs(S.live) do want[#want + 1] = def.clip end
+  for _, def in pairs(S.remedy) do want[#want + 1] = def.clip end
   for _, sev in ipairs({ 'hairpin', 'tight', 'medium', 'fast', 'kink' }) do
     want[#want + 1] = sev .. '_left'
     want[#want + 1] = sev .. '_right'

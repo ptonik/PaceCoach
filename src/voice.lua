@@ -61,8 +61,14 @@ local function start(clip, volume)
 end
 
 -- Queues a clip. urgent = true drops everything waiting and speaks now.
-function Voice.say(clip, volume, urgent)
+-- maxAgeS: drop the clip if it has waited longer than this (for cues that
+-- are only worth saying at the moment they apply).
+function Voice.say(clip, volume, urgent, maxAgeS)
   if Voice.disabled or not Voice.dir then return end
+  if not Voice.index[clip] then
+    Voice.missing = clip                    -- an older sounds folder: stay silent, say so in Diagnostics
+    return
+  end
   if urgent then
     Voice.queue = {}
     if Voice.playing then
@@ -71,7 +77,12 @@ function Voice.say(clip, volume, urgent)
       Voice.playing = nil
     end
   end
-  Voice.queue[#Voice.queue + 1] = { clip = clip, volume = volume or 1, t = Voice.clock }
+  Voice.queue[#Voice.queue + 1] = { clip = clip, volume = volume or 1, t = Voice.clock, maxAgeS = maxAgeS }
+end
+
+-- True while a clip is playing or waiting.
+function Voice.talking()
+  return Voice.playing ~= nil or #Voice.queue > 0
 end
 
 function Voice.update(dt)
@@ -83,7 +94,7 @@ function Voice.update(dt)
   end
   while not Voice.playing and #Voice.queue > 0 do
     local item = table.remove(Voice.queue, 1)
-    if now - item.t <= MAX_QUEUE_AGE_S and not Voice.disabled then   -- stale calls are dropped
+    if now - item.t <= (item.maxAgeS or MAX_QUEUE_AGE_S) and not Voice.disabled then   -- stale calls are dropped
       if start(item.clip, item.volume) then
         Voice.playing = { clip = item.clip, endT = now + (Voice.index[item.clip] or 0.8) + GAP_S }
       end

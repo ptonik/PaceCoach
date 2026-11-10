@@ -2,7 +2,7 @@
 -- These are starting values; they are meant to be tuned after real laps.
 
 return {
-  version = '0.3.1',
+  version = '0.4.0',
 
   grid = {
     cellM = 2,          -- target cell length along the track
@@ -63,6 +63,10 @@ return {
     busyAfterMistakeS = 1.2, -- quiet time after a lock-up, slide or excursion
     recoverS = 1.0,          -- back under control for this long: call the corner again
     reCueS = 0.8,            -- second "brake" if you pass the benchmark's point unbraked
+    brakingOn = 0.1,         -- already on the brake pedal: no need to say "brake"
+    liftedGas = 0.2,         -- already off the throttle: no need to say "lift"
+    maxBrakeCues = 2,        -- "brake" is said at most this often for one corner
+    brakeCueGapS = 1.5,      -- ...and not twice within this time
   },
 
   -- Measuring a corner (used for the benchmark's targets and for your pass).
@@ -102,7 +106,109 @@ return {
     coastM = 15,
     lineM = 2,
     exitSlowKmh = 5,
+    vagueMs = 200,           -- a small loss with no clear cause is not worth a note
     showS = 4.5,
+  },
+
+  -- Live coaching: what is said WHILE you drive a corner, against the benchmark.
+  live = {
+    minKmh = 45,             -- below this the coach says nothing
+    gapS = 1.1,              -- quiet time between two live cues
+    showS = 1.7,             -- how long a cue stays on the card
+    maxPerCorner = 3,        -- live cues per corner, at most (2 on the beginner HUD)
+    -- "Brake harder": braking, but not enough to make the corner at the benchmark's speed.
+    brakingOn = 0.1,
+    hardBrake = 0.85,        -- already braking this hard: nothing more to ask for
+    harderRatio = 1.15,      -- needs this much more deceleration than the benchmark did here
+    harderMinG = 0.4,
+    harderKmh = 4,
+    harderHoldS = 0.25,
+    minRoomM = 15,           -- no braking advice this close to the slowest point
+    -- "Ease off the brake": still braking although already well under the benchmark's speed.
+    easeBrake = 0.25,
+    easeKmh = 8,
+    easeFrac = 0.08,
+    easeHoldS = 0.3,
+    -- "Too early": braking long before the benchmark's brake point.
+    earlyBrake = 0.3,
+    earlyM = 25,
+    earlyS = 0.7,
+    earlyHoldS = 0.25,
+    -- "No brake here": braking for a corner the benchmark only lifts for.
+    noBrakeAheadM = 80,
+    noBrakeHoldS = 0.2,
+    -- "Wait": on the throttle mid-corner, well before the benchmark.
+    waitGas = 0.6,
+    waitRefGas = 0.2,
+    waitAheadM = 10,
+    waitSlackKmh = 5,        -- only if you are not much slower than the benchmark
+    waitHoldS = 0.3,
+    -- "Full throttle" / "Stay on the throttle": the benchmark is flat out here and you are not.
+    flatRefGas = 0.9,
+    flatBehindM = 15,
+    flatAheadM = 60,
+    liftGas = 0.3,
+    partGas = 0.8,
+    liftHoldS = 0.5,
+    partHoldS = 0.9,
+    exitRegionM = 140,
+    -- "Move left / right": off the benchmark's line on the way to a corner.
+    lineM = 2.5,
+    lineAheadM = 150,
+    lineAfterExitM = 40,
+    lineBeforeTurnM = 10,
+    lineHoldS = 0.6,
+    -- "Turn in": spoken as you reach the benchmark's turn-in point.
+    turnLeadS = 0.25,
+    turnFrac = 0.3,          -- turn-in is where the benchmark's steering reaches this share of its peak
+    minSteerDeg = 8,         -- a benchmark with less steering than this has no usable steering trace
+    turnPadM = 40,
+  },
+
+  -- The lesson plan: one corner and one fix at a time, across laps.
+  lesson = {
+    keepPasses = 6,          -- passes remembered per corner
+    medianOf = 3,
+    minFocusMs = 120,        -- smaller losses are not worth a lesson
+    offTrackMs = 600,        -- an off counts at least this much
+    masterMs = 100,          -- fixed when the loss is under this...
+    masterFrac = 0.4,        -- ...or under this share of what it was
+    masterStreak = 2,        -- ...this many times in a row
+    masterFloorMs = 30,      -- the least that counts as "under" when judged at the exit
+    parkAfter = 5,           -- no progress after this many tries: move on, come back later
+    parkPasses = 4,
+    betterMs = 80,
+    stepFrac = 0.5,          -- ask for half the gap at a time
+    stepMinM = 5,
+    stepMaxM = 25,
+    praiseGapS = 12,
+    -- Skill scores, 0..100.
+    brakePerM = 2.5,
+    speedPerKmh = 5,
+    throttlePerM = 2.5,
+    exitPerKmh = 2.5,
+    linePerM = 20,
+    consistencyPerS = 50,
+    -- Training steps.
+    cleanLaps = 3,
+    brakeWithinM = 15,
+    speedWithinKmh = 5,
+    throttleWithinM = 10,
+    exitWithinKmh = 5,
+    passShare = 0.7,
+    consistentLaps = 3,
+    consistentMs = 500,
+    historyKeep = 40,
+  },
+
+  -- Updates from GitHub.
+  update = {
+    base = 'https://raw.githubusercontent.com/ptonik/PaceCoach/main/',
+    manifest = 'update.txt',
+    page = 'https://github.com/ptonik/PaceCoach',
+    checkAfterS = 5,         -- seconds after start-up before looking for a new version
+    maxFiles = 200,
+    maxBytes = 20 * 1024 * 1024,
   },
 
   teacher = {
