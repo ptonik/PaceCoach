@@ -30,6 +30,7 @@ Settings.defaults = {
   repeatCorner = false, -- put the car back before the focus corner after every attempt
   ghostCar = true,      -- a lead car to follow, a moment ahead of you
   cones = true,
+  sizeHint = true,      -- remind me at the start that the HUD window can be made bigger
   cornerStrip = true,   -- the corner ahead on the HUD: brake and throttle shape, and where you are in it         -- brake board, turn-in, apex and exit markers on the track
   spotter = true,       -- call cars alongside: "car left", "clear"
   sharedLaps = true,    -- download a shared fast lap for this car and track, if one exists

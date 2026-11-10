@@ -264,6 +264,56 @@ function Limit.build(track, base, env, cfg, trackCfg)
   return lap
 end
 
+-- The estimated lap: what there is to go on before anybody has driven a lap.
+-- It follows the game's ideal line at the grip seen so far (cautious at
+-- first), so the line, the brake points and the corner strip can be shown
+-- from the first corner. It is a guide to where things happen, not a
+-- benchmark to be judged against. Returns a lap with source = 'estimate'.
+function Limit.fromLine(track, points, grip, cfg)
+  local n = track.n
+  local v = {}
+  for i = 1, n do
+    local kappa = math.abs(track.curv[i] or 0)
+    v[i] = cfg.estimateVCapMs
+    if kappa > 1e-4 then v[i] = math.min(cfg.estimateVCapMs, grip:cornerSpeed(1 / kappa)) end
+  end
+  local brake, accel = grip.brake * G, cfg.estimateAccelG * G
+  for _ = 1, 2 do
+    for j = n, 1, -1 do
+      local nxt = (j % n) + 1
+      local reach = math.sqrt(v[nxt] * v[nxt] + 2 * brake * track.ds[j])
+      if v[j] > reach then v[j] = reach end
+    end
+    for j = 1, n do
+      local nxt = (j % n) + 1
+      local reach = math.sqrt(v[j] * v[j] + 2 * accel * track.ds[j])
+      if v[nxt] > reach then v[nxt] = reach end
+    end
+  end
+  local lap = {
+    n = n, t = {}, v = {}, gas = {}, brake = {}, steer = {}, gear = {}, x = {}, z = {},
+    source = 'estimate', pedals = 'derived', estimated = true, valid = true, complete = true, filled = n,
+  }
+  local t = 0
+  for i = 1, n do
+    local nxt = (i % n) + 1
+    lap.t[i] = t * 1000
+    lap.v[i] = v[i] * 3.6
+    lap.steer[i], lap.gear[i], lap.x[i], lap.z[i] = 0, 0, points[i].x, points[i].z
+    local a = (v[nxt] * v[nxt] - v[i] * v[i]) / (2 * math.max(0.01, track.ds[i]))
+    if a < -0.1 * G then
+      lap.brake[i], lap.gas[i] = U.clamp(-a / brake, 0.11, 1), 0
+    elseif a > 0.03 * G then
+      lap.brake[i], lap.gas[i] = 0, 1
+    else
+      lap.brake[i], lap.gas[i] = 0, 0.3
+    end
+    t = t + track.ds[i] / math.max(1, (v[i] + v[nxt]) / 2)
+  end
+  lap.timeMs = t * 1000
+  return lap
+end
+
 -- Pace levels: how close a lap time is to the limit lap.
 -- levels: list of { id =, within = ratio } from slowest to fastest.
 -- Returns { index =, id =, ratio =, nextId =, nextMs = time still to find for the next level }.

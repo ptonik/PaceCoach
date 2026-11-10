@@ -66,7 +66,7 @@ repository by itself.
 what the app drew; the track view is a stand-in for the game.
 `tools/make_replay.sh` builds the page.*
 
-> **Status (0.9.0): early release.** The logic is covered by automated tests,
+> **Status (0.9.1): early release.** The logic is covered by automated tests,
 > and the whole app runs against a stand-in for the game. In that simulation
 > a learner who starts 3.7 s off the teacher beats it on lap 12 and is within
 > 0.3% of what the simulated car can really do after 45 laps. That shows the
@@ -114,6 +114,22 @@ newest version from this page, without you downloading anything first.
 3. Drag the windows where you want them. The HUD scales with its width.
 
 Keep the main PaceCoach window open while you drive: recording runs with it.
+
+**Make it big enough to read.** Everything in the HUD scales with the width
+of its window, and the default is small on a large or ultrawide screen. Drag
+the corner of the PaceCoach window until you can read the card at a glance
+without looking away from the road.
+
+### What you get, and when
+
+| When | What switches on |
+|---|---|
+| From the first corner | Corner calls, the brake cue, the map, mistake tips, and an **estimated** driving line, brake points, cones and corner strip worked out from the shape of the track |
+| After your first complete lap | Live coaching, feedback after every corner, a focus corner, the lead car. A lap with an off in it is enough to start; a clean lap (no more than two wheels off) also counts as your best |
+| With an AI car of the same model in the session | A teacher lap: real targets, the pace level, the licence ladder |
+
+The HUD has a dim line saying which of these it is working from, and Panel →
+Coach lists the steps with the ones you have ticked.
 
 ## Updates
 
@@ -214,6 +230,8 @@ Diagnostics**, and the last lines of
 | The coach talks too much | Panel → Settings: switch off "turn in", the line advice, praise, or all live coaching. The beginner HUD already limits it to two cues per corner. |
 | No teacher appears | The AI cars must be the same model as yours, and one of them has to finish a clean lap without visiting the pits. Panel → Teacher shows how many cars are being watched. |
 | Corner repeat does nothing | It needs a focus corner (drive a lap or two with a benchmark) and an offline practice session with no other cars. It starts the next time you approach that corner at speed. |
+| The HUD is too small to read | Drag the corner of the PaceCoach window. Everything scales with its width. |
+| "Estimated line and brake points" will not go away | The coach is waiting for one complete lap. It does not have to be clean. |
 | No line on the track | Panel → Teacher shows the line's status. If it reports an error, send it to me; the rest of the app is unaffected. Meanwhile the game's own "Ideal line" assist is a good substitute. |
 | "Update failed" in Settings | Nothing was changed. Try "Check for updates" again later, or run **Update PaceCoach from GitHub.bat**. |
 

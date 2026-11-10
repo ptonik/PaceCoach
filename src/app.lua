@@ -134,10 +134,14 @@ local function refreshBenchmark()
   -- real lap yourself, it becomes the benchmark, so the coaching never ends
   -- at "you beat the teacher".
   App.limitLap, App.level = nil, nil
-  local base = lap or App.best
+  -- Until a lap counts, the fastest complete lap with an off in it stands in
+  -- as your own reference: a beginner who runs wide somewhere every lap
+  -- would otherwise never get any coaching at all.
+  local own = App.best or App.roughLap
+  local base = lap or own
   if base then
     guard('limit lap', function()
-      local env = Limit.envelope(App.track, { base, App.teacherLap, App.importLap, App.best }, App.grip,
+      local env = Limit.envelope(App.track, { base, App.teacherLap, App.importLap, own }, App.grip,
         config.limit, config.grip, config.track)
       App.limitEnv, App.limitGripVersion = env, App.grip.version
       App.limitLap = Limit.build(App.track, base, env, config.limit, config.track)
@@ -154,14 +158,26 @@ local function refreshBenchmark()
   end
   App.benchPlan = lap and Targets.build(App.track, lap, App.segs, config.targets, config.metrics) or nil
   App.ownPlan = nil
-  if not lap and App.best then
+  if not lap and own then
     -- Driving alone: the coach compares you with the limit lap built on your
     -- own best lap, which asks every corner for the grip you showed in your
     -- best one. The brake cue stays with the cautious estimate.
-    App.ownPlan = Targets.build(App.track, App.limitLap or App.best, App.segs, config.targets, config.metrics)
+    App.ownPlan = Targets.build(App.track, App.limitLap or own, App.segs, config.targets, config.metrics)
+  end
+  App.coachLabel = label or (App.ownPlan and (App.limitLap and 'limit' or 'own') or nil)
+  if not lap and not own and App.points then
+    -- Nobody has driven a lap yet. Work one out from the ideal line, so the
+    -- line, the brake points and the corner strip are there from the start.
+    guard('estimated lap', function()
+      local estimate = Limit.fromLine(App.track, App.points, App.grip, config.limit)
+      App.ownPlan = Targets.build(App.track, estimate, App.segs, config.targets, config.metrics)
+      App.ownPlan.estimated = true
+      App.coachLabel = 'estimate'
+    end)
   end
   App.coachPlan = App.benchPlan or App.ownPlan
-  App.coachLabel = label or (App.ownPlan and (App.limitLap and 'limit' or 'own') or nil)
+  -- Only a lap somebody drove is something to be judged against.
+  App.judged = App.coachPlan ~= nil and App.coachLabel ~= 'estimate'
   App.cuePlan = App.benchPlan or App.plan
   App.pilot:setPlan(App.cuePlan)
   App.live:setPlan(App.coachPlan)
@@ -170,7 +186,7 @@ local function refreshBenchmark()
     App.lessonLabel = App.coachLabel
     App.lesson:rebase()
   end
-  App.lesson.allowPush = App.coachPlan ~= nil
+  App.lesson.allowPush = App.judged
   App.tier = coachingTier()
   App.lesson.tier = App.tier
 end
@@ -317,7 +333,7 @@ end
 -- What the coach says at the end of a lap: where the most time went, and
 -- the one thing to work on next.
 local function lessonLine(sum, brief)
-  if not (sum and App.track and App.coachPlan and App.settings.lessons) then return nil end
+  if not (sum and App.track and App.judged and App.settings.lessons) then return nil end
   local corners = App.track.corners
   local parts = {}
   if not brief and sum.worstK and sum.worstMs and sum.worstMs >= config.lesson.minFocusMs then
@@ -480,11 +496,18 @@ local function finishLap(lap, s)
 
   local time = U.formatLap(lap.timeMs)
   if not lap.valid then
-    showTip({ title = 'Lap ' .. time .. ' does not count',
-      body = withAdvice('Reason: ' .. (Panel.REASONS[lap.invalid] or tostring(lap.invalid)) .. '.'), rank = 50 },
-      advice and 8 or 5)
+    local body = 'Reason: ' .. (Panel.REASONS[lap.invalid] or tostring(lap.invalid)) .. '.'
+    if not App.best and (lap.invalid == 'offtrack' or lap.invalid == 'cut')
+        and (not App.roughLap or lap.timeMs < App.roughLap.timeMs) then
+      lap.source = 'player'
+      App.roughLap = lap
+      refreshBenchmark()
+      body = body .. ' ' .. S.status.roughUsed
+    end
+    showTip({ title = 'Lap ' .. time .. ' does not count', body = withAdvice(body), rank = 50 }, advice and 8 or 6)
     return
   end
+  App.roughLap = nil
   local best = App.best
   if not best or lap.timeMs < best.timeMs then
     lap.source = 'player'
@@ -870,6 +893,7 @@ local function frame(dt)
     App.cuePlan = App.benchPlan or App.plan
     App.pilot:setPlan(App.cuePlan)
     App.gripDirty = true
+    if App.coachLabel == 'estimate' then refreshBenchmark() end   -- the estimated lap follows the grip
   end
   if App.gripDirty and App.clock - (App.gripSavedAt or 0) > 30 then
     App.gripDirty, App.gripSavedAt = false, App.clock
@@ -906,7 +930,7 @@ local function frame(dt)
           Voice.say(ev.corner.severity .. '_' .. ev.corner.dir, vol)
           for _, c in ipairs(ev.chain or {}) do Voice.say('then_' .. c.dir, vol) end
           -- The corner being worked on gets its instruction with the call.
-          local f = App.settings.lessons and App.coachPlan and App.lesson.focus or nil
+          local f = App.settings.lessons and App.judged and App.lesson.focus or nil
           local r = f and S.remedy[f.id]
           if r then
             local here = f.k == ev.corner.index
@@ -927,7 +951,7 @@ local function frame(dt)
   -- The live coach: compares the car with the benchmark at this very point
   -- and speaks up while there is still time to do something about it.
   App.gauge = nil
-  if ready and App.coachPlan then
+  if ready and App.judged then
     local li = liveIn
     li.cell, li.pos, li.v, li.gas, li.brake = cell, s.pos, s.speedKmh, s.gas, s.brake
     li.x, li.z = s.x, s.z
@@ -946,7 +970,7 @@ local function frame(dt)
     end
   end
 
-  if ready and App.coachPlan then App.drillFrame(s, cell, dt, busy, driving) end
+  if ready and App.judged then App.drillFrame(s, cell, dt, busy, driving) end
 
   -- Feedback against the benchmark (or your own best), given just past the
   -- exit of each corner.
@@ -955,14 +979,14 @@ local function frame(dt)
     local k = Metrics.segmentAt(App.segs, cell, n)
     local was = App.segIdx
     if k ~= was then
-      if was and k and driving and k == (was % #App.segs) + 1 then
+      if App.judged and was and k and driving and k == (was % #App.segs) + 1 then
         if not App.exitJudged then judgeCorner(was) end
         settleCorner(was)
       end
       App.segIdx, App.exitJudged, App.offInSeg, App.trafficInSeg = k, false, false, false
     end
     local es = k and App.coachPlan.exitSegs[k]
-    if es and driving and was == k and not App.exitJudged
+    if App.judged and es and driving and was == k and not App.exitJudged
         and U.forward(App.segs[k].from, cell, n) >= es.cells then
       App.exitJudged = true
       judgeCorner(k)
@@ -997,7 +1021,7 @@ local function frame(dt)
       local lastShown = App.tipShownAt[id]
       if rank <= 2 or not lastShown or App.clock - lastShown >= config.hud.repeatS then
         App.tipShownAt[id] = App.clock
-        showTip({ title = S.tips[id].title, body = S.tips[id].why,
+        showTip({ title = S.tips[id].title, body = S.tips[id].fix or S.tips[id].why,
           where = corner and corner.name or nil, rank = rank })
       end
     end

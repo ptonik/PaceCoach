@@ -783,6 +783,62 @@ test('the session log keeps only the newest laps, and can be switched off', func
   eq(quiet[COMBO .. '.session.txt'], nil)
 end)
 
+print('the first minutes, as seen on a real screen')
+test('line, brake points and corner strip are there from the first corner, estimated', function()
+  local app, state = session()
+  local markers = package.loaded['src/markers']
+  local panel = package.loaded['src/panel']
+  state.lockTab = true
+  panel.tab = 'Coach'
+  local quadsEarly
+  run(app, state, drive({ laps = 0.6 }), function(i)
+    if i == 600 then quadsEarly = state.quads end
+  end)
+  noErrors(app, state)
+  eq(app.coachLabel, 'estimate')
+  eq(app.judged, false, 'an estimate is not something to be judged against')
+  check(quadsEarly and quadsEarly > 100, 'the line is on the track within ten seconds: ' .. tostring(quadsEarly))
+  check(markers.cones > 0, 'cones are out')
+  check(sawText(state, 'Estimated line and brake points.'), 'the HUD says what it is showing and how to get more')
+  check(sawText(state, 'about ') and sawText(state, '(est.)'), 'the corner strip is labelled as an estimate')
+  check(sawText(state, 'How to get more out of the coach'), 'the panel lists the steps')
+  check(sawText(state, 'Too small? Drag the corner'), 'and the HUD says it can be made bigger')
+  eq(next(app.cornerResults), nil, 'nobody is judged against an estimate')
+  local live = {}
+  for _, def in pairs(S.live) do live[def.clip] = true end
+  for _, p in ipairs(state.plays) do check(not live[p.clip], 'no live coaching from an estimate: ' .. p.clip) end
+end)
+
+test('a beginner who runs off every lap still gets a coach', function()
+  local files = {}
+  local app, state = session({ store = files })
+  state.lockTab = true
+  package.loaded['src/panel'].tab = 'Coach'      -- the Mistakes tab keeps the full explanations
+  local lapFrame = {}
+  run(app, state, driveAs(SLOW, { laps = 3.3 }), function(i, s)
+    lapFrame[s.lapCount] = lapFrame[s.lapCount] or i
+    local k = i - lapFrame[s.lapCount]
+    if k >= 1500 and k < 1560 then return { wheelsOutside = 4 } end   -- four wheels off, once a lap
+  end)
+  noErrors(app, state)
+  eq(app.best, nil, 'no lap counted')
+  for _, lap in ipairs(app.laps) do eq(lap.valid, false) end
+  check(app.roughLap, 'but the fastest of them is kept to work from')
+  eq(app.coachLabel, 'limit')
+  eq(app.judged, true)
+  check(next(app.cornerResults) ~= nil, 'corners are judged from the second lap on')
+  check(app.gauge and app.gauge.active, 'and the live comparison runs')
+  check(sawText(state, 'Coaching from your last lap.'), 'the HUD says what it is working from')
+  check(sawText(state, 'all the same.'), 'and the lap note says so too (it wraps over two lines)')
+  check(sawText(state, 'Brake earlier here next lap.'), 'tips on the HUD are one short line')
+  check(not sawText(state, 'Nearly always caused by arriving too fast'), 'not a paragraph')
+  eq(files[COMBO .. '.txt'], nil, 'a lap that does not count is never saved as your best')
+  -- The first clean lap takes over.
+  run(app, state, driveAs(SLOW, { laps = 1.3 }))
+  check(app.best, 'a clean lap counts')
+  eq(app.roughLap, nil)
+end)
+
 print('in the passenger seat')
 test('corner repeat: the focus corner again and again without driving the lap', function()
   local files = Story.storeWithTeacher(world)

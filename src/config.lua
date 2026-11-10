@@ -2,7 +2,7 @@
 -- These are starting values; they are meant to be tuned after real laps.
 
 return {
-  version = '0.9.0',
+  version = '0.9.1',
 
   grid = {
     cellM = 2,          -- target cell length along the track
@@ -227,6 +227,8 @@ return {
     minLatG = 0.5,
     minBrakeG = 0.5,
     fallbackAccelG = 0.3,
+    estimateAccelG = 0.3,    -- how hard the estimated lap accelerates before any lap has been seen
+    estimateVCapMs = 83,     -- ...and the top speed it assumes
     maxSpeedup = 0.08,       -- never ask for more than this over what was really driven
     steadyM = 24,            -- cornering only counts once it has lasted this long
     bandRise = 1.35,         -- grip may not jump by more than this from one speed range to the next

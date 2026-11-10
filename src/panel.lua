@@ -171,11 +171,19 @@ local function coachTab(app, W)
   end
   local corners = app.track.corners
 
-  if not app.coachPlan then
+  -- What is switched on so far, and what the next step unlocks.
+  local hasLap, hasTeacher = app.judged == true, app.benchmark ~= nil and app.benchLabel ~= nil
+  if not (hasLap and hasTeacher) then
+    line(S.status.stepsTitle, C.dim)
+    line((app.coachPlan and '  [x] ' or '  [ ] ') .. S.status.step1, app.coachPlan and C.green or C.white)
+    line((hasLap and '  [x] ' or '  [ ] ') .. S.status.step2, hasLap and C.green or C.white)
+    line((hasTeacher and '  [x] ' or '  [ ] ') .. S.status.step3, hasTeacher and C.green or C.white)
+    ui.text(string.format(S.status.lineStatus, tostring(Markers.status)))
+    gap()
+  end
+  if not app.judged then
     line('No lesson plan yet.', C.orange)
     paragraph(S.lesson.noBenchmark, W)
-    paragraph('The quickest way: start a session with one to three AI opponents in the same car as you. '
-      .. 'After a lap or two of theirs the coach has a teacher lap and starts working with you.', W)
   else
     line('Coaching against ' .. (S.who[app.coachLabel] or 'the benchmark')
       .. '   ' .. U.formatLap(app.coachPlan.lap.timeMs), C.green)
@@ -514,6 +522,7 @@ local function settingsTab(app, W)
   toggle(app, 'ghostCar', 'Lead car to follow on the track')
   toggle(app, 'cones', 'Cones and my brake marker on the track')
   toggle(app, 'cornerStrip', 'Corner strip on the HUD (pedal shapes to follow)')
+  toggle(app, 'sizeHint', 'Remind me that the HUD window can be dragged bigger')
   toggle(app, 'line3d', 'Driving line on the track (needs a benchmark lap)')
   toggle(app, 'ghostPedals', 'Pedal bars on the advanced HUD')
   toggle(app, 'paceBar', 'Speed bar against the benchmark')

@@ -22,7 +22,7 @@ return {
 
   gears = { 'R', 'N', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th' },
 
-  benchmark = { teacher = 'teacher', friend = 'friend', you = 'your best', own = 'your best', limit = 'limit lap', shared = 'shared lap' },
+  benchmark = { teacher = 'teacher', friend = 'friend', you = 'your best', own = 'your best', limit = 'limit lap', shared = 'shared lap', estimate = 'estimate' },
 
   -- Post-corner feedback. %d is filled with metres or speed.
   coach = {
@@ -44,7 +44,7 @@ return {
   },
 
   -- Who the live coach compares you with, as it reads in a sentence.
-  who = { teacher = 'the teacher', friend = 'your friend', you = 'your best lap', own = 'your best lap', limit = 'the limit lap', shared = 'the shared lap' },
+  who = { teacher = 'the teacher', friend = 'your friend', you = 'your best lap', own = 'your best lap', limit = 'the limit lap', shared = 'the shared lap', estimate = 'the estimate' },
 
   -- Live coaching: the word on the card, the clip that is spoken, the colour
   -- of the card and a one-line reason. %s is filled from `who`.
@@ -241,6 +241,16 @@ return {
 
   status = {
     loading = 'Reading the track...',
+    estimateRow = 'Estimated line and brake points. Finish one lap to switch on live coaching.',
+    roughRow = 'Coaching from your last lap. Keep it on the track for a whole lap to make it count.',
+    roughUsed = 'The coach works from it all the same.',
+    sizeHint = 'Too small? Drag the corner of this window: everything grows with it.',
+    soloRow = 'Coaching against your own best. Add an AI car of the same model for a teacher.',
+    stepsTitle = 'How to get more out of the coach',
+    step1 = 'Line, brake points and corner strip, estimated from the shape of the track',
+    step2 = 'Live coaching and one thing to fix at a time: finish one lap (a clean one, no more than two wheels off, also counts as your best)',
+    step3 = 'A teacher to follow: a session with one to three AI cars in the same car as you',
+    lineStatus = 'Line on the track: %s',
     noLine = 'This track has no ideal line. Corner callouts are unavailable here.',
     noCorners = 'No corners found on this track.',
     incompatible = 'This CSP version is missing something PaceCoach needs. Open the Panel, Diagnostics tab.',
@@ -262,38 +272,47 @@ return {
   -- Mistakes: a short title and a plain-language "why and what to do".
   tips = {
     spin = {
+      fix = 'Gentler with your feet. Brake a little earlier here.',
       title = 'Spin',
       why = 'The rear overtook the front. It usually starts with too much speed or a sudden input. Next time through, brake a little earlier and be gentle with your feet.',
     },
     offtrack = {
+      fix = 'Brake earlier here next lap.',
       title = 'Off track',
       why = 'Nearly always caused by arriving too fast. Brake earlier here next lap, make the corner cleanly, then add speed back a little at a time.',
     },
     lockup = {
+      fix = 'Less brake pressure.',
       title = 'Locked brakes',
       why = 'A locked tyre slides instead of gripping, so you stop later and cannot steer. Press a little less hard, and ease off the pedal as the car slows.',
     },
     abs = {
+      fix = 'A touch less brake.',
       title = 'ABS working hard',
       why = 'You are asking for more braking than the tyres can give. Aim for firm pressure just below the point where ABS starts to pulse.',
     },
     wheelspin = {
+      fix = 'Squeeze the throttle in.',
       title = 'Wheelspin on exit',
       why = 'Too much throttle for the grip available. Squeeze the pedal in gradually as you straighten the wheel.',
     },
     understeer = {
+      fix = 'Slow more, then turn less.',
       title = 'Understeer: the front is sliding',
       why = 'You arrived too fast or turned too hard. More steering will not help. Slow a touch more before turning, and unwind the wheel until the front grips again.',
     },
     oversteer = {
+      fix = 'Smoother off the brake and onto the throttle.',
       title = 'The rear is stepping out',
       why = 'The back tyres lost grip. Come off the brake more smoothly and be gentler with the throttle. Steer into the slide early and calmly.',
     },
     coast = {
+      fix = 'Brake later. No coasting.',
       title = 'Coasting',
       why = 'The car is neither slowing nor accelerating, so time is slipping away. Brake a little later and stay on the brake until you turn in, then go back to the throttle.',
     },
     sawing = {
+      fix = 'One smooth turn of the wheel.',
       title = 'Busy hands',
       why = 'Lots of small steering corrections unsettle the car. Try one smooth turn in, hold it, and one smooth unwind.',
     },

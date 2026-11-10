@@ -219,7 +219,9 @@ local function cornerStrip(app, W, s, y)
 
   -- The number that matters most: the slowest speed, before and after.
   local note
-  if jCar <= tg.minJ then
+  if plan.estimated then
+    note = 'about ' .. speedText(tg.minKmh, app.settings.mph) .. ' (' .. S.status.estimate .. ')'
+  elseif jCar <= tg.minJ then
     note = 'target ' .. speedText(tg.minKmh, app.settings.mph)
   elseif lap and lap.v[tg.minCell] then
     local diff = lap.v[tg.minCell] - tg.minKmh
@@ -232,7 +234,7 @@ end
 -- The instruction for the corner being worked on, shown while it is the
 -- next corner.
 local function focusRow(app, W, s, y)
-  local f = app.settings.lessons and app.coachPlan and app.lesson and app.lesson.focus
+  local f = app.settings.lessons and app.judged and app.lesson and app.lesson.focus
   local card = app.card
   if not (f and card and card.ready and card.phase ~= 'exit' and card.corner.index == f.k) then return y end
   local text = app.remedyText(f.id, f.value)
@@ -274,6 +276,23 @@ local function paceRow(app, W, s, y)
   local diff = app.settings.mph and (g.dv * 0.621371) or g.dv
   G.textRight(string.format('%+d %s', U.round(diff), app.settings.mph and 'mph' or 'km/h'),
     14 * s, W - 14 * s, y + 4 * s, color)
+  return y + h + 6 * s
+end
+
+-- One dim line saying what the coach is working from and how to get more.
+local function sourceRow(app, W, s, y)
+  local text
+  if app.coachLabel == 'estimate' then
+    text = S.status.estimateRow
+  elseif app.roughLap and not app.best and not app.benchmark then
+    text = S.status.roughRow
+  elseif (app.coachLabel == 'limit' or app.coachLabel == 'own') and not app.benchmark and (app.lapNumber or 0) <= 3 then
+    text = S.status.soloRow
+  end
+  if not text then return y end
+  local h = 22 * s
+  G.rect(0, y, W, y + h, C.cardBg, 6 * s)
+  G.text(text, G.fitSize(text, 12 * s, W - 24 * s), 12 * s, y + 4 * s, C.dim)
   return y + h + 6 * s
 end
 
@@ -326,7 +345,7 @@ end
 local function tipCard(app, W, s, y)
   local tip = app.tip
   if not tip or app.clock >= tip.untilT then return y end
-  local size = 14 * s
+  local size = 15 * s
   if tip.wrapW ~= W then
     tip.lines = tip.body and wrap(tip.body, size, W - 28 * s) or {}
     tip.wrapW = W
@@ -368,6 +387,14 @@ function Hud.draw(app)
     y = cornerStrip(app, W, s, y)
     y = focusRow(app, W, s, y)
     y = paceRow(app, W, s, y)
+    y = sourceRow(app, W, s, y)
+  end
+  -- On a big screen the default window is far too small to read at speed.
+  if W < 600 and app.clock < 45 and app.settings.sizeHint ~= false then
+    local h = 22 * s
+    G.rect(0, y, W, y + h, C.focusBg, 6 * s)
+    G.text(S.status.sizeHint, G.fitSize(S.status.sizeHint, 12 * s, W - 24 * s), 12 * s, y + 4 * s, C.white)
+    y = y + h + 6 * s
   end
   if not app.settings.beginner then
     y = deltaRow(app, W, s, y)
