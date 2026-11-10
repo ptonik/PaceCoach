@@ -453,14 +453,19 @@ test('cars of another model are not teachers', function()
   check(sawText(state, 'No teacher lap yet'), 'the panel explains how to get one')
 end)
 
-test('beating the teacher makes your own best lap the benchmark', function()
+test('beating the teacher moves the coaching on to the limit lap', function()
   local app, state = session({ others = { { model = 'test_car' } } })
   run(app, state, driveAs(QUICK, { laps = 3.2 }), nil, { (driveAs(SLOW, { laps = 6 })) })
   noErrors(app, state)
   check(app.teacherLap, 'the slow AI still set a lap')
-  eq(app.benchLabel, 'you')
-  eq(app.benchmark, app.best)
+  eq(app.benchLabel, 'limit')
+  eq(app.benchmark, app.limitLap)
+  eq(app.limitLap.source, 'limit')
+  check(app.limitLap.timeMs <= app.best.timeMs, 'the limit lap is never slower than the lap it is built on')
+  check(app.limitLap.timeMs > app.best.timeMs * 0.9, 'and not absurdly faster: ' .. app.limitLap.timeMs)
+  check(app.level and app.level.index >= 5, 'someone ahead of the teacher is high on the ladder: ' .. tostring(app.level and app.level.id))
   check(sawText(state, 'You beat the teacher'), 'the app says so')
+  check(sawText(state, 'limit lap'), 'and names the new benchmark')
 end)
 
 test('a lap file from a friend is used as the benchmark', function()
@@ -582,7 +587,8 @@ test('a learner who does what the coach says gets faster, corner by corner', fun
   for _, text in ipairs({ 'TOO EARLY', 'EASE OFF', 'TURN IN', 'FULL THROTTLE', 'MOVE RIGHT', 'FOCUS',
       'vs teacher', 'Sorted. Well done.', 'That is it.', 'Brake about 25 m later.', 'Next lap, ',
       'Coaching against the teacher', 'Training steps', 'Where the time goes', 'Skills, against the teacher',
-      'Ideal lap', 'Said while you drove', 'This is the first one.' }) do
+      'Ideal lap', 'Said while you drove', 'This is the first one.',
+      ' speed: white you, blue teacher', '- Come off the brake a little sooner' }) do
     check(sawText(state, text), 'never shown: ' .. text)
   end
   local played = {}
@@ -612,6 +618,40 @@ test('a learner who does what the coach says gets faster, corner by corner', fun
   check(history[1].bench and history[1].braking, 'benchmark time and skills are kept')
 end)
 
+test('past the teacher: the learner keeps finding time against the limit lap', function()
+  local carMs = Story.carLimitMs(world)
+  local teacherMs, beatenAt, sawPush, lastLimit, limitFell = nil, nil, false, nil, 0
+  local app, state, laps = Story.run({
+    world = world, laps = 45,
+    onLap = function(a, _, lapNumber, lapMs)
+      teacherMs = teacherMs or (a.teacherLap and a.teacherLap.timeMs)
+      if not beatenAt and a.coachLabel == 'limit' then beatenAt = lapNumber end
+      local f = a.lesson.focus
+      if f and f.id == 'push' then sawPush = true end
+      if a.limitLap then
+        if lastLimit and a.limitLap.timeMs < lastLimit - 20 then limitFell = limitFell + 1 end
+        lastLimit = a.limitLap.timeMs
+        check(a.limitLap.timeMs <= a.best.timeMs + 1, 'the limit lap is never slower than the best lap')
+      end
+    end,
+  })
+  noErrors(app, state)
+  check(beatenAt and beatenAt < 20, 'the teacher is beaten: lap ' .. tostring(beatenAt))
+  check(sawPush, 'the coach sent the learner looking for the limit')
+  check(limitFell >= 5, 'the limit lap moved as grip was found: ' .. limitFell .. ' times')
+  check(app.best.timeMs < teacherMs - 1000, string.format('more than a second ahead of the teacher: %.2f s', (teacherMs - app.best.timeMs) / 1000))
+  check(app.best.timeMs < carMs * 1.006, string.format('within 0.6%% of what the car can really do: %.2f%%', app.best.timeMs / carMs * 100))
+  check(app.best.timeMs >= carMs - 1, 'and not faster than the car can go')
+  check(laps[1] > carMs * 1.09, 'having started more than 9% off')
+  eq(app.level.id, 'limit')
+  check(sawText(state, 'Level up: '), 'level-ups are announced')
+  check(sawText(state, 'Find the limit here'), 'the push instruction was shown')
+  local joined = table.concat(clips(state), ' ')
+  check(joined:find('level_up', 1, true) and joined:find('tip_push', 1, true), 'and spoken')
+  print(string.format('        lap 1 %.2f s, teacher %.2f s, lap 45 %.2f s, the car itself %.2f s',
+    laps[1] / 1000, teacherMs / 1000, app.best.timeMs / 1000, carMs / 1000))
+end)
+
 test('the next session remembers the last one and starts a new line', function()
   local app, state = session({ store = lessonStore })
   local panel = package.loaded['src/panel']
@@ -623,6 +663,29 @@ test('the next session remembers the last one and starts a new line', function()
   check(sawText(state, 'Session 1'), 'the earlier session is listed')
   check(sawText(state, 'laps, '), 'with its lap count')
   eq(#Reference.decodeHistory(lessonStore[COMBO .. '.history.txt']), 2)
+end)
+
+test('driving alone: the coach works against the limit lap built on your own best', function()
+  local soloStore = {}
+  local app, state = session({ store = soloStore })
+  local panel = package.loaded['src/panel']
+  state.lockTab = true
+  panel.tab = 'Coach'
+  run(app, state, driveAs(SLOW, { laps = 3.3 }))
+  noErrors(app, state)
+  eq(app.benchLabel, nil, 'no teacher, so the brake cue stays with the cautious estimate')
+  eq(app.cuePlan, app.plan)
+  eq(app.coachLabel, 'limit')
+  eq(app.coachPlan.lap.source, 'limit')
+  check(app.coachPlan.lap.timeMs <= app.best.timeMs, 'never slower than your own best')
+  check(app.gauge and app.gauge.active, 'the live comparison runs')
+  eq(app.level, nil, 'no pace level without somebody else to measure against')
+  check(sawText(state, 'Coaching against the limit lap'), 'the panel says what it compares with')
+  local report = soloStore[COMBO .. '.report.txt']
+  check(report, 'a session report is written')
+  check(report:find('PaceCoach session report', 1, true) and report:find('Laps: 3, 3 clean', 1, true), report)
+  check(report:find('Self-test: everything', 1, true), report)
+  check(sawText(state, '.report.txt'), 'and the panel says where it is')
 end)
 
 test('without any benchmark the coach explains how to get one', function()
@@ -772,7 +835,7 @@ end)
 test('every clip the app can ask for exists on disk', function()
   local index = dofile(root .. '/sounds/index.lua')
   local want = { 'brake', 'beep', 'best_lap', 'then_left', 'then_right', 'throttle', 'teacher_ready',
-    'good', 'nice', 'better', 'thats_it', 'fixed' }
+    'good', 'nice', 'better', 'thats_it', 'fixed', 'level_up' }
   for _, def in pairs(S.live) do want[#want + 1] = def.clip end
   for _, def in pairs(S.remedy) do want[#want + 1] = def.clip end
   for _, sev in ipairs({ 'hairpin', 'tight', 'medium', 'fast', 'kink' }) do

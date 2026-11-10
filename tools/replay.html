@@ -104,6 +104,7 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-c
 .ladder .time { font-family: var(--display); font-size: 21px; font-weight: 600; }
 .gap { display: flex; align-items: center; gap: 8px; min-width: 150px; }
 .gap i { display: block; height: 8px; background: var(--brake); border-radius: 1px; }
+.gap.ahead i { background: var(--throttle); }
 .gap span { color: var(--muted); font-size: 14px; }
 .ladder tr.teacher .time, .ladder tr.teacher td { color: var(--muted); }
 
@@ -115,7 +116,7 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-c
 <main class="wrap">
   <header>
     <h1>PaceCoach <span>replay</span></h1>
-    <p class="lede">A simulated learner drives eight laps while the real PaceCoach code coaches them: one corner at a time, until the lap comes together. The overlay and every spoken line are the app's own output.</p>
+    <p class="lede">A simulated learner drives twenty laps while the real PaceCoach code coaches them: one corner at a time up to the teacher's pace, then past it towards what the car can really do. The overlay and every spoken line are the app's own output.</p>
   </header>
 
   <section class="monitor" aria-label="Replay">
@@ -147,7 +148,7 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-c
     <h2>Lap by lap</h2>
     <div class="ladder-wrap">
       <table class="ladder">
-        <thead><tr><th>Lap</th><th>Time</th><th>Gap to the teacher</th><th>What the coach asked for next</th></tr></thead>
+        <thead><tr><th>Lap</th><th>Time</th><th>Against the teacher</th><th>Level</th><th>What the coach asked for next</th></tr></thead>
         <tbody id="ladder"></tbody>
       </table>
     </div>
@@ -156,7 +157,7 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-c
   <section class="notes">
     <div>
       <h2>The driver</h2>
-      <p>A <strong>simulation</strong>, not a person: a learner who brakes far too early for the hairpin, creeps through turn 2, takes the wrong side of the road into the chicane and coasts out of turn 6. After each lap they do what the coach asked in the focus corner, and nothing else.</p>
+      <p>A <strong>simulation</strong>, not a person: a learner who brakes far too early for the hairpin, creeps through turn 2, takes the wrong side of the road into the chicane and coasts out of turn 6. After each lap they do what the coach asked in the focus corner, and nothing else. Once nothing is being lost, the coach says "find the limit" and they use a little more of the car there.</p>
     </div>
     <div>
       <h2>The coach</h2>
@@ -164,7 +165,7 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-c
     </div>
     <div>
       <h2>What it is not</h2>
-      <p>Game footage. The track is a 1.9 km test circuit made for the app's automated tests, and fonts differ from the game's. Red on the line is where the teacher brakes, green where it is flat out.</p>
+      <p>Game footage, or proof about a human driver. The track is a 1.9 km test circuit made for the app's automated tests, and fonts differ from the game's. Red on the line is where the teacher brakes, green where it is flat out.</p>
     </div>
   </section>
 </main>
@@ -392,10 +393,15 @@ const AUDIO = /*AUDIO*/null;
   let ladderLap = 0;
   function buildLadder() {
     const body = $('ladder');
-    const worst = Math.max(...R.laps.map((l) => l.ms - R.teacherMs), 1);
-    const tr0 = document.createElement('tr'); tr0.className = 'teacher';
-    tr0.innerHTML = '<td>Teacher</td><td class="time"></td><td></td><td class="focus">The benchmark: an opponent in the same car</td>';
-    tr0.children[1].textContent = lapTime(R.teacherMs); body.append(tr0);
+    const worst = Math.max(...R.laps.map((l) => Math.abs(l.ms - R.teacherMs)), 1);
+    const fixedRow = (name, ms, note) => {
+      const tr = document.createElement('tr'); tr.className = 'teacher';
+      tr.innerHTML = '<td></td><td class="time"></td><td></td><td></td><td class="focus"></td>';
+      tr.children[0].textContent = name; tr.children[1].textContent = lapTime(ms); tr.children[4].textContent = note;
+      body.append(tr);
+    };
+    fixedRow('Teacher', R.teacherMs, 'The first benchmark: an opponent in the same car');
+    fixedRow('The car', R.carMs, 'What this simulated car can really do. The simulation knows it; the app does not.');
     for (const lap of R.laps) {
       const tr = document.createElement('tr'); tr.dataset.lap = lap.n;
       const gap = lap.ms - R.teacherMs;
@@ -404,11 +410,12 @@ const AUDIO = /*AUDIO*/null;
       b.addEventListener('click', () => { seek(lap.t0 + 0.05); });
       const td1 = document.createElement('td'); td1.append(b);
       const td2 = document.createElement('td'); td2.className = 'time'; td2.textContent = lapTime(lap.ms);
-      const td3 = document.createElement('td'); const g = document.createElement('div'); g.className = 'gap';
-      const bar = document.createElement('i'); bar.style.width = Math.max(2, 110 * gap / worst) + 'px';
-      const lab = document.createElement('span'); lab.textContent = '+' + (gap / 1000).toFixed(2) + ' s'; g.append(bar, lab); td3.append(g);
-      const td4 = document.createElement('td'); td4.className = 'focus'; td4.textContent = lap.focus || 'Nothing left worth a lesson';
-      tr.append(td1, td2, td3, td4); body.append(tr);
+      const td3 = document.createElement('td'); const g = document.createElement('div'); g.className = gap < 0 ? 'gap ahead' : 'gap';
+      const bar = document.createElement('i'); bar.style.width = Math.max(2, 110 * Math.abs(gap) / worst) + 'px';
+      const lab = document.createElement('span'); lab.textContent = (gap < 0 ? '-' : '+') + Math.abs(gap / 1000).toFixed(2) + ' s'; g.append(bar, lab); td3.append(g);
+      const td5 = document.createElement('td'); td5.textContent = lap.level || '';
+      const td4 = document.createElement('td'); td4.className = 'focus'; td4.textContent = lap.focus || 'A new benchmark: the coach watches a lap first';
+      tr.append(td1, td2, td3, td5, td4); body.append(tr);
     }
   }
   function render() {

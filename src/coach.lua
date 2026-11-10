@@ -12,8 +12,8 @@ local Coach = {}
 --          offTrack = bool }
 -- cfg = config.coach
 -- Returns { lossMs =, id =, value =, good = bool }.
--- ids: gain, ok, offTrack, brakeLate, brakeEarly, noBrake, overSlow, gasLift,
---      throttleLate, coast, wide, exitSlow, slower
+-- ids: gain, ok, offTrack, brakeLate, brakeEarly, noBrake, noTrail, overSlow,
+--      gasLift, throttleLate, coast, wide, exitSlow, slower
 function Coach.judge(ref, got, extra, cfg)
   extra = extra or {}
   local loss = got.timeMs - ref.timeMs
@@ -42,6 +42,10 @@ function Coach.judge(ref, got, extra, cfg)
     res.id, res.value = 'brakeLate', -brakeDiff
   elseif brakeDiff and brakeDiff >= cfg.brakeEarlyM then
     res.id, res.value = 'brakeEarly', brakeDiff
+  elseif ref.brakeEndRelM and got.brakeEndRelM and ref.brakeEndRelM >= cfg.trailMinM
+      and ref.brakeEndRelM - got.brakeEndRelM >= cfg.trailShortM and minDiff <= -cfg.minSlowKmh then
+    -- The benchmark carries the brake into the corner; this pass let go early.
+    res.id, res.value = 'noTrail', ref.brakeEndRelM - got.brakeEndRelM
   elseif minDiff <= -cfg.minSlowKmh then
     res.id, res.value = 'overSlow', -minDiff
   elseif got.lifts > ref.lifts then

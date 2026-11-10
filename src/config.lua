@@ -2,7 +2,7 @@
 -- These are starting values; they are meant to be tuned after real laps.
 
 return {
-  version = '0.4.0',
+  version = '0.6.0',
 
   grid = {
     cellM = 2,          -- target cell length along the track
@@ -106,6 +106,8 @@ return {
     coastM = 15,
     lineM = 2,
     exitSlowKmh = 5,
+    trailMinM = 5,           -- the benchmark keeps braking at least this far into the corner
+    trailShortM = 12,        -- ...and you were off the brake this much sooner
     vagueMs = 200,           -- a small loss with no clear cause is not worth a note
     showS = 4.5,
   },
@@ -177,6 +179,11 @@ return {
     masterFloorMs = 30,      -- the least that counts as "under" when judged at the exit
     parkAfter = 5,           -- no progress after this many tries: move on, come back later
     parkPasses = 4,
+    pushTries = 2,           -- passes spent looking for the limit in one corner before moving on
+    steadyOf = 3,            -- passes looked at when judging how repeatable a corner is
+    steadyBrakeM = 15,       -- a brake point that moves more than this is worth a lesson
+    steadyDoneFrac = 0.6,    -- ...until it moves less than this share of that
+    steadyTries = 4,
     betterMs = 80,
     stepFrac = 0.5,          -- ask for half the gap at a time
     stepMinM = 5,
@@ -199,6 +206,33 @@ return {
     consistentLaps = 3,
     consistentMs = 500,
     historyKeep = 40,
+  },
+
+  -- The limit lap: the benchmark once the teacher has been beaten.
+  limit = {
+    latPct = 0.9,            -- share of a lap's cornering that sets "the grip it showed"
+    brakePct = 0.9,
+    accelPct = 0.8,
+    accelBinKmh = 20,
+    maxKmh = 400,
+    minRadiusM = 300,
+    minKmh = 40,
+    minLatG = 0.5,
+    minBrakeG = 0.5,
+    fallbackAccelG = 0.3,
+    maxSpeedup = 0.08,       -- never ask for more than this over what was really driven
+    steadyM = 24,            -- cornering only counts once it has lasted this long
+    bandRise = 1.35,         -- grip may not jump by more than this from one speed range to the next
+    vCapMs = 120,
+    -- Pace levels: best lap as a share of the limit lap.
+    levels = {
+      { id = 'rookie', within = math.huge },
+      { id = 'novice', within = 1.10 },
+      { id = 'club', within = 1.06 },
+      { id = 'front', within = 1.03 },
+      { id = 'expert', within = 1.015 },
+      { id = 'limit', within = 1.005 },
+    },
   },
 
   -- Updates from GitHub.

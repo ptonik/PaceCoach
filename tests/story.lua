@@ -35,10 +35,26 @@ function Story.flaws()
   }
 end
 
+-- The car can do more than the teacher asks of it: this much more cornering
+-- grip (as a factor) and this much braking, in g.
+Story.CAR = { lat = 1.09, brakeG = 1.32 }
+
 -- What the learner changes when the coach names a corner: the weakness in
--- that corner shrinks by two thirds.
-function Story.improve(flaws, k, base)
+-- that corner shrinks by two thirds. When the coach says "find the limit",
+-- or is already working against the limit lap, the learner uses a little
+-- more of the car there instead.
+function Story.improve(flaws, k, base, mode)
   local f = flaws[k]
+  if mode then
+    f = f or {}
+    flaws[k] = f
+    local step = (mode == 'push') and 0.4 or 0.67
+    local lat, brake = f.lat or 1, f.brake or base.brakeG
+    f.lat = lat + (Story.CAR.lat - lat) * step
+    f.brake = brake + (Story.CAR.brakeG - brake) * step
+    f.coastM, f.off, f.earlyGas, f.lift = nil, nil, nil, nil
+    return
+  end
   if not f then return end
   if f.brake then
     f.brake = f.brake + (base.brakeG - f.brake) * 0.67
@@ -57,6 +73,18 @@ function Story.improve(flaws, k, base)
     if math.abs(f.off) < 0.6 then f.off = nil end
   end
   f.earlyGas, f.lift = nil, nil
+end
+
+-- The lap this car can really do: every corner at the car's own limit. The
+-- app cannot know this number; the simulation does, which is what makes it
+-- a fair yardstick for how far the coaching gets.
+function Story.carLimitMs(world, base)
+  local flaws = {}
+  for k = 1, #world.corners do flaws[k] = { lat = Story.CAR.lat, brake = Story.CAR.brakeG } end
+  local st = {}
+  Synth.lap(world, Synth.plan(world, base or Story.LEARNER, flaws), st)   -- a lap to get up to speed
+  Synth.lap(world, Synth.plan(world, base or Story.LEARNER, flaws), st)
+  return st.lastLapMs
 end
 
 -- A store that already holds a teacher lap, as it would after one session
@@ -115,15 +143,16 @@ function Story.run(opts)
       if opts.afterDraw then opts.afterDraw(app, state, s, lapIndex) end
     end
     if app.lastError then error('app error at frame ' .. frame .. ': ' .. app.lastError) end
-    if #app.laps > lapsHeard then
+    if app.lapNumber > lapsHeard then
       -- The app has just summed up a lap. The learner listens, and from here
       -- on does what was asked in the focus corner.
-      lapsHeard = #app.laps
-      laps[lapsHeard] = app.laps[lapsHeard].timeMs
+      lapsHeard = app.lapNumber
+      laps[lapsHeard] = app.laps[#app.laps].timeMs
       if opts.onLap then opts.onLap(app, state, lapsHeard, laps[lapsHeard], flaws) end
       local focus = app.lesson and app.lesson.focus
       if focus and opts.learn ~= false then
-        Story.improve(flaws, focus.k, base)
+        local mode = (focus.id == 'push' and 'push') or (app.coachLabel == 'limit' and 'limit') or nil
+        Story.improve(flaws, focus.k, base, mode)
         plan = Synth.plan(world, base, flaws)
       end
     end
@@ -164,13 +193,19 @@ if arg and arg[0] and arg[0]:match('story%.lua$') then
     onLap = function(app, _, lapIndex, lapMs)
       local f = app.lesson.focus
       local skills = app.lesson:skills()
-      print(string.format('== lap %d: %s   focus: %s   skills: braking %s, speed %s, exits %s, line %s',
-        lapIndex, U.formatLap(lapMs),
+      local lv = app.level
+      print(string.format('== lap %d: %s   vs %s %s   level: %s   focus: %s   skills: braking %s, speed %s, exits %s',
+        lapIndex, U.formatLap(lapMs), tostring(app.coachLabel), U.formatLap(app.coachPlan and app.coachPlan.lap.timeMs),
+        lv and string.format('%s %.1f%%', S.level[lv.id], lv.ratio * 100) or '-',
         f and (app.track.corners[f.k].name .. ' ' .. S.remedy[f.id].short) or 'none',
-        tostring(skills.braking), tostring(skills.speed), tostring(skills.exits), tostring(skills.line)))
+        tostring(skills.braking), tostring(skills.speed), tostring(skills.exits)))
     end,
   })
-  print(string.format('\nteacher %s   laps: %s', U.formatLap(app.benchmark and app.benchmark.timeMs),
+  local points = Synth.line(Synth.rectangle(), 1000)
+  local carMs = Story.carLimitMs(Track.build(points, { cfg = config.track, leftSign = 1 }))
+  print(string.format('\nthe car can really do %s; best lap %s is %.2f%% of that', U.formatLap(carMs),
+    U.formatLap(app.best.timeMs), app.best.timeMs / carMs * 100))
+  print(string.format('benchmark %s   laps: %s', U.formatLap(app.benchmark and app.benchmark.timeMs),
     table.concat((function() local t = {} for i, ms in ipairs(laps) do t[i] = U.formatLap(ms) end return t end)(), '  ')))
   print('fixed: ' .. #app.lesson.fixed .. '   error: ' .. tostring(app.lastError))
 end

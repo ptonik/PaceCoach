@@ -169,7 +169,7 @@ end
 
 local HISTORY_KEYS = {
   'at', 'best', 'bench', 'laps', 'valid', 'ideal', 'fixed',
-  'braking', 'speed', 'exits', 'line', 'consistency',
+  'braking', 'speed', 'exits', 'line', 'consistency', 'pace',
 }
 
 function Reference.encodeHistory(list)
@@ -210,6 +210,15 @@ end
 function Reference:saveHistory(trackId, carId, list, keep)
   while keep and #list > keep do table.remove(list, 1) end
   return self.save(self:historyPath(trackId, carId), Reference.encodeHistory(list)) and true or false
+end
+
+-- The session written up for a person to read (see report.lua).
+function Reference:reportPath(trackId, carId)
+  return self.dir .. '/' .. U.safeName(trackId) .. '__' .. U.safeName(carId) .. '.report.txt'
+end
+
+function Reference:saveReport(trackId, carId, text)
+  return self.save(self:reportPath(trackId, carId), text) and true or false
 end
 
 -- Learned grip belongs to the car, not the track, and lives in its own small

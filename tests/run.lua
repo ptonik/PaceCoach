@@ -1543,6 +1543,156 @@ test('session history survives a round trip to disk', function()
   eq(#ref:loadHistory('other', 'car'), 0)
 end)
 
+-- Limit lap --------------------------------------------------------------------
+
+local Limit = require('src/limit')
+print('limit lap')
+local LIM = config.limit
+local function envOf(laps, grip) return Limit.envelope(track, laps, grip, LIM, config.grip, config.track) end
+local teacherEnv = envOf({ teacherLap })
+
+test('the envelope reads the grip a lap showed', function()
+  near(teacherEnv.lat[1], 1.3, 0.08, 'cornering')
+  near(teacherEnv.brake, 1.2, 0.08, 'braking')
+  near(teacherEnv.accel[5], 0.45, 0.05, 'acceleration around 90 km/h')
+  for b = 2, 4 do check(teacherEnv.lat[b] >= teacherEnv.lat[b - 1], 'grip does not fall with speed') end
+end)
+test('a swerve in the driven line is not mistaken for grip', function()
+  local lap = copyLap(teacherLap)
+  local from = Track.cellAt(track, (track.corners[1].endM + 120) / track.lengthM)
+  for j = 0, 50 do
+    local i = U.wrapIndex(from + j, track.n)
+    lap.x[i] = lap.x[i] + 3.5                      -- this straight runs along z: a sideways step
+  end
+  local env = envOf({ lap })
+  for b = 1, 4 do near(env.lat[b], teacherEnv.lat[b], 0.1, 'speed range ' .. b) end
+  -- A hand-driven lap is too ragged altogether: its cornering comes from the grip meter.
+  local own = copyLap(teacherLap)
+  own.source = 'player'
+  local grip = Grip.new(config.grip)
+  grip.latObs = { 1.1, 1.1, 1.1, 1.1 }
+  near(envOf({ own }, grip).lat[1], 1.1, 0.001)
+end)
+test('the limit lap is never slower than the lap it is built on, and never absurd', function()
+  local env = envOf({ teacherLap, learnerLap })
+  local lim = Limit.build(track, learnerLap, env, LIM, config.track)
+  eq(lim.source, 'limit')
+  check(lim.timeMs < learnerLap.timeMs - 1500, 'a slow lap has a lot of grip left: ' .. (learnerLap.timeMs - lim.timeMs))
+  for i = 1, track.n do
+    check(lim.v[i] >= learnerLap.v[i] - 1e-6, 'slower than the real lap at cell ' .. i)
+    check(lim.v[i] <= learnerLap.v[i] * (1 + LIM.maxSpeedup) + 1e-6, 'more than the cap at cell ' .. i)
+    check(i == 1 or lim.t[i] >= lim.t[i - 1], 'time runs forward')
+  end
+  local own = Limit.build(track, teacherLap, teacherEnv, LIM, config.track)
+  check(own.timeMs <= teacherLap.timeMs + 1, 'built on a lap with only its own grip: no slower')
+  check(own.timeMs > teacherLap.timeMs * 0.97, 'and hardly faster: ' .. (teacherLap.timeMs - own.timeMs) .. ' ms')
+  local plan = Targets.build(track, lim, segs, config.targets, config.metrics)
+  check(plan.targets[1].brakeCell and plan.targets[1].minKmh > 20 and plan.targets[1].throttleCell,
+    'the limit lap works as a benchmark: brake point, speed and throttle point')
+end)
+test('grip found on the meter moves the limit', function()
+  local grip = Grip.new(config.grip)
+  grip.latObs, grip.brakeObs = { 1.45, 1.45, 1.45, 1.45 }, 1.35
+  local env = envOf({ teacherLap }, grip)
+  near(env.lat[1], 1.45, 0.001)
+  near(env.brake, 1.35, 0.001)
+  local before = Limit.build(track, teacherLap, teacherEnv, LIM, config.track)
+  local after = Limit.build(track, teacherLap, env, LIM, config.track)
+  check(after.timeMs < before.timeMs - 500, 'more grip, faster limit: ' .. (before.timeMs - after.timeMs) .. ' ms')
+end)
+test('pace levels', function()
+  local L = LIM.levels
+  eq(Limit.level(112000, 100000, L).id, 'rookie')
+  eq(Limit.level(110000, 100000, L).id, 'novice')
+  local club = Limit.level(105000, 100000, L)
+  eq(club.id, 'club')
+  eq(club.nextId, 'front')
+  near(club.nextMs, 2000, 0.01, 'time to find for the next level')
+  local top = Limit.level(100400, 100000, L)
+  eq(top.id, 'limit')
+  eq(top.nextId, nil)
+  eq(Limit.level(nil, 100000, L), nil)
+end)
+test('with nothing left to fix, the coach sends the driver looking for the limit', function()
+  local lesson = Lesson.new(3, LC)
+  for k, ms in ipairs({ 20000, 30000, 25000 }) do
+    lesson:record(k, res('ok', 20))
+    lesson:settle(k, ms, 20, true)
+  end
+  eq(lesson:lapDone(75000, true).focus, nil, 'not unless it is allowed')
+  lesson.allowPush = true
+  local sum = lesson:lapDone(75000, true)
+  eq(sum.focus.id, 'push')
+  eq(sum.focus.k, 2, 'the corner that takes longest first')
+  local v = lesson:record(2, res('gain', -80))
+  eq(v.kind, 'pushGain')
+  check(lesson.focus and lesson.focus.k == 2, 'a second try in the same corner')
+  v = lesson:record(2, res('ok', 10))
+  eq(v.kind, 'pushed')
+  eq(v.next.k, 3, 'then the next longest that has not been tried')
+  -- A real loss takes over from exploring at the end of the lap.
+  lesson:record(1, res('brakeEarly', 400, 20))
+  sum = lesson:lapDone(75000, true)
+  eq(sum.focus.k, 1)
+  eq(sum.focus.id, 'brakeEarly')
+  eq(sum.changed, true)
+end)
+test('letting go of the brake before a corner the benchmark trails into', function()
+  local ref = { timeMs = 5000, brakeRelM = -60, brakeEndRelM = 12, minKmh = 80, exitKmh = 120, lifts = 0, coastM = 0 }
+  local got = { timeMs = 5300, brakeRelM = -62, brakeEndRelM = -6, minKmh = 74, exitKmh = 119, lifts = 0, coastM = 0, peakBrake = 0.9 }
+  local r = Coach.judge(ref, got, {}, config.coach)
+  eq(r.id, 'noTrail')
+  eq(r.value, 18)
+  ref.brakeEndRelM = 0
+  eq(Coach.judge(ref, got, {}, config.coach).id, 'overSlow', 'a benchmark that does not trail asks for nothing of the kind')
+  check(type(bench.targets[1].brakeEndRelM) == 'number', 'measured for real laps')
+end)
+
+test('a brake point that moves around gets its own lesson', function()
+  local lesson = Lesson.new(2, LC)
+  local function pass(k, brakeDiff)
+    return lesson:record(k, res('ok', 30), { braking = true, brakeDiffM = brakeDiff, minDiffKmh = 0, exitDiffKmh = 0 })
+  end
+  pass(1, 0)
+  pass(1, 22)
+  eq(lesson:steadiness(1), nil, 'two passes are not enough to tell')
+  pass(1, -4)
+  near(lesson:steadiness(1).brakeM, 26, 0.01)
+  for _, d in ipairs({ 3, 5, 1 }) do pass(2, d) end
+  local sum = lesson:lapDone(60000, true)
+  eq(sum.focus.id, 'steady')
+  eq(sum.focus.k, 1, 'the corner that varies, not the steady one')
+  near(sum.focus.value, 26, 0.01)
+  eq(pass(1, 4).kind, 'steadyOn')
+  local v = pass(1, 2)
+  eq(v.kind, 'steadyDone', 'the last three brake points are within 8 m')
+  eq(lesson.focus, nil)
+  pass(1, 40)
+  eq(lesson:choose(), nil, 'and the corner is left alone for a while')
+end)
+test('the session report reads like a debrief', function()
+  local Report = require('src/report')
+  local text = Report.build({
+    version = '9.9', track = 'ks_track', car = 'car', date = '2026-11-10', laps = 12, valid = 9,
+    bestMs = 83456, benchLabel = 'teacher', benchMs = 82000, limitMs = 81000, level = { name = 'Club racer', ratio = 1.0303 },
+    focus = { corner = 'T3', text = 'Brake about 10 m later.', tries = 2 },
+    fixed = { { corner = 'T1', fromMs = 900, toMs = 80 } },
+    corners = { { name = 'T3', typicalMs = 420, cause = 'brake later', lastMs = 380, bestMs = 120, passes = 9, steadyM = 21 } },
+    skills = { { name = 'Braking points', value = 72 }, { name = 'Line' } },
+    stages = { { name = 'Stay on the track', line = '3 of 3 clean laps in a row', done = true } },
+    said = { { text = 'ease off', count = 4 } }, mistakes = { { title = 'Locked brakes', count = 2 } },
+    grip = { lat = { 1.2, 1.25 }, brake = 1.1 }, missing = { 'ui.slider' }, lastError = 'hud: boom',
+  })
+  for _, want in ipairs({ 'PaceCoach session report', 'Laps: 12, 9 clean', 'Best lap: 1:23.456', 'Benchmark: teacher 1:22.000',
+      '(you: +1.46 s)', 'Pace level: Club racer, 103.0%', 'Working on: T3. Brake about 10 m later. (2 tries)',
+      'T1   +0.90 s to +0.08 s', 'brake point moves 21 m', 'Braking points   72', '[x] Stay on the track',
+      'ease off x4', 'Locked brakes x2', 'cornering 1.20 / 1.25 g', 'missing on this CSP build: ui.slider', 'Last error: hud: boom' }) do
+    check(text:find(want, 1, true), 'missing from the report: ' .. want .. '\n' .. text)
+  end
+  local empty = Report.build({ version = '1', track = 't', car = 'c' })
+  check(empty:find('Benchmark: none yet', 1, true) and empty:find('Self-test: everything', 1, true), empty)
+end)
+
 -- Updater -----------------------------------------------------------------------
 
 local Updater = require('src/updater')

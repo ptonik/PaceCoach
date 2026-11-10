@@ -31,6 +31,9 @@ function Lesson:rebase()
   self.focus = nil
   self.fixed = {}
   self.parked = {}
+  self.pushed = {}                   -- corner -> pass count when it was last pushed
+  self.steadied = {}                 -- corner -> pass count until which it is left alone
+  self.passTotal = 0
 end
 
 local function median(values)
@@ -86,6 +89,38 @@ function Lesson:choose()
       end
     end
   end
+  if not best then
+    -- No big loss anywhere. Is there a corner that is driven differently
+    -- every lap? Being repeatable comes before being faster.
+    local worst
+    for k = 1, self.m do
+      local c = self.corners[k]
+      local s = self:steadiness(k)
+      if s and s.brakeM >= cfg.steadyBrakeM and c.count >= (self.steadied[k] or 0)
+          and (not worst or s.brakeM > worst.value) then
+        worst = { k = k, id = 'steady', firstId = 'steady', steady = true, value = s.brakeM,
+          baseMs = 0, baseExitMs = 0, tries = 0, streak = 0 }
+      end
+    end
+    best = worst
+  end
+  if not best and self.allowPush then
+    -- Nothing is being lost any more. The only way on is to go and find more
+    -- grip, one corner at a time: the one not tried for longest, and among
+    -- those the one that takes most time.
+    local pick, pickAge, pickMs
+    for k = 1, self.m do
+      local c = self.corners[k]
+      if #c.passes > 0 then
+        local age = self.passTotal - (self.pushed[k] or -1e9)
+        local ms = c.bestSegMs or 0
+        if not pick or age > pickAge or (age == pickAge and ms > pickMs) then pick, pickAge, pickMs = k, age, ms end
+      end
+    end
+    if pick then
+      best = { k = pick, id = 'push', firstId = 'push', push = true, baseMs = 0, baseExitMs = 0, tries = 0, streak = 0 }
+    end
+  end
   self.focus = best
   return best
 end
@@ -109,6 +144,7 @@ function Lesson:record(k, res, detail)
   }
   if #c.passes > cfg.keepPasses then table.remove(c.passes, 1) end
   c.count = c.count + 1
+  self.passTotal = self.passTotal + 1
 
   local verdict = { k = k, nowMs = loss, prevMs = prev and prev.exitMs or nil, kind = 'first' }
   if prev then
@@ -117,7 +153,31 @@ function Lesson:record(k, res, detail)
   end
 
   local f = self.focus
-  if f and f.k == k then
+  if f and f.k == k and f.steady then
+    -- Working on doing the same thing every lap.
+    verdict.focus = true
+    f.tries = f.tries + 1
+    local s = self:steadiness(k)
+    if s then f.value = s.brakeM end
+    verdict.kind = 'steadyOn'
+    local done = s and f.tries >= 2 and s.brakeM <= cfg.steadyBrakeM * cfg.steadyDoneFrac
+    if done or f.tries >= cfg.steadyTries then
+      verdict.kind = done and 'steadyDone' or 'parked'
+      self.steadied[k] = c.count + cfg.parkPasses
+      self.focus = nil
+      verdict.next = self:choose()
+    end
+  elseif f and f.k == k and f.push then
+    -- Looking for the limit: a couple of tries here, then on to another corner.
+    verdict.focus = true
+    f.tries = f.tries + 1
+    verdict.kind = (res.id == 'gain') and 'pushGain' or 'pushed'
+    if f.tries >= cfg.pushTries or res.id == 'offTrack' then
+      self.pushed[k] = self.passTotal
+      self.focus = nil
+      verdict.next = self:choose()
+    end
+  elseif f and f.k == k then
     verdict.focus = true
     f.tries = f.tries + 1
     -- Only part of a loss shows by the exit, so the bar is set against what
@@ -136,7 +196,7 @@ function Lesson:record(k, res, detail)
     end
     if good then
       -- settle() has the last word
-    elseif f.tries >= cfg.parkAfter and not f.everGood then
+    elseif f.tries >= cfg.parkAfter then
       self.parked[k] = c.count + cfg.parkPasses
       self.focus = nil
       verdict.kind = 'parked'
@@ -162,11 +222,16 @@ function Lesson:settle(k, segMs, lossMs, clean)
     c.bestSegMs = segMs
   end
   local f = self.focus
-  if not (f and f.k == k and f.judged and lossMs) then return nil end
+  if not (f and f.k == k and not f.push and not f.steady and f.judged and lossMs) then return nil end
   f.judged = false
   if not f.lastGood then return nil end
   if not clean or lossMs > math.max(cfg.masterMs, f.baseMs * cfg.masterFrac) then
     f.streak = 0                    -- fine at the exit, but the time went on the way out
+    if f.tries >= cfg.parkAfter then
+      self.parked[k] = c.count + cfg.parkPasses
+      self.focus = nil
+      return { kind = 'parked', k = k, next = self:choose() }
+    end
     return nil
   end
   if f.streak < cfg.masterStreak then return nil end
@@ -188,6 +253,14 @@ function Lesson:lapDone(timeMs, valid)
     self.cleanStreak = 0
   end
   local changed = false
+  if self.focus and self.focus.push then
+    -- A real loss has appeared (the limit moved): it takes over from exploring.
+    local push = self.focus
+    self.allowPush, self.focus = false, nil
+    local real = self:choose()
+    self.allowPush = true
+    if real then changed = true else self.focus = push end
+  end
   if not self.focus then changed = self:choose() ~= nil end
   local worstK, worstMs
   for k = 1, self.m do
@@ -196,6 +269,24 @@ function Lesson:lapDone(timeMs, valid)
     if p and (not worstMs or p.lossMs > worstMs) then worstK, worstMs = k, p.lossMs end
   end
   return { focus = self.focus, changed = changed, worstK = worstK, worstMs = worstMs }
+end
+
+-- How repeatable corner k is: how far the brake point moved over the last
+-- few clean passes. Returns { brakeM =, passes = }, or nil with too few.
+function Lesson:steadiness(k)
+  local cfg = self.cfg
+  local passes = self.corners[k].passes
+  local lo, hi, used = math.huge, -math.huge, 0
+  for i = math.max(1, #passes - cfg.steadyOf + 1), #passes do
+    local d = passes[i].detail
+    if d and not d.offTrack and d.brakeDiffM then
+      used = used + 1
+      if d.brakeDiffM < lo then lo = d.brakeDiffM end
+      if d.brakeDiffM > hi then hi = d.brakeDiffM end
+    end
+  end
+  if used < cfg.steadyOf then return nil end
+  return { brakeM = hi - lo, passes = used }
 end
 
 -- How big a step to ask for when a brake point has to move: half the gap,
@@ -222,6 +313,7 @@ function Lesson:ranking()
       rows[#rows + 1] = {
         k = k, typicalMs = score, id = id, value = value, lastMs = last.lossMs, lastId = last.id,
         bestMs = best, passes = c.count, parked = self.parked[k] ~= nil and c.count < self.parked[k],
+        steady = self:steadiness(k),
       }
     end
   end

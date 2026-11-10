@@ -17,6 +17,8 @@ local Teacher = require('src/teacher')
 local Live = require('src/live')
 local Lesson = require('src/lesson')
 local Updater = require('src/updater')
+local Limit = require('src/limit')
+local Report = require('src/report')
 local Sim = require('src/sim')
 local Settings = require('src/settings')
 local Voice = require('src/voice')
@@ -97,6 +99,7 @@ local function remedyText(id, value)
   local r = S.remedy[id]
   if not r then return nil end
   if r.step then return string.format(r.text, Lesson.stepM(value, config.lesson)) end
+  if r.value then return string.format(r.text, U.round(value or 0)) end
   return r.text
 end
 App.remedyText = remedyText
@@ -109,13 +112,40 @@ local function refreshBenchmark()
   local lap, label = Teacher.choose(App.teacherLap, App.importLap, App.best)
   App.benchmark, App.benchLabel = lap, label
   if App.state ~= 'ready' then return end
+
+  -- The limit lap: what this car could do on the line of the fastest real
+  -- lap, with the best grip anyone has shown in it. Once you are the fastest
+  -- real lap yourself, it becomes the benchmark, so the coaching never ends
+  -- at "you beat the teacher".
+  App.limitLap, App.level = nil, nil
+  local base = lap or App.best
+  if base then
+    guard('limit lap', function()
+      local env = Limit.envelope(App.track, { base, App.teacherLap, App.importLap, App.best }, App.grip,
+        config.limit, config.grip, config.track)
+      App.limitEnv, App.limitGripVersion = env, App.grip.version
+      App.limitLap = Limit.build(App.track, base, env, config.limit, config.track)
+    end)
+  end
+  if lap then
+    if App.limitLap and App.best and (App.teacherLap or App.importLap) then
+      App.level = Limit.level(App.best.timeMs, App.limitLap.timeMs, config.limit.levels)
+    end
+    if label == 'you' and App.limitLap then
+      lap, label = App.limitLap, 'limit'
+      App.benchmark, App.benchLabel = lap, label
+    end
+  end
   App.benchPlan = lap and Targets.build(App.track, lap, App.segs, config.targets, config.metrics) or nil
   App.ownPlan = nil
   if not lap and App.best then
-    App.ownPlan = Targets.build(App.track, App.best, App.segs, config.targets, config.metrics)
+    -- Driving alone: the coach compares you with the limit lap built on your
+    -- own best lap, which asks every corner for the grip you showed in your
+    -- best one. The brake cue stays with the cautious estimate.
+    App.ownPlan = Targets.build(App.track, App.limitLap or App.best, App.segs, config.targets, config.metrics)
   end
   App.coachPlan = App.benchPlan or App.ownPlan
-  App.coachLabel = label or (App.ownPlan and 'own' or nil)
+  App.coachLabel = label or (App.ownPlan and (App.limitLap and 'limit' or 'own') or nil)
   App.cuePlan = App.benchPlan or App.plan
   App.pilot:setPlan(App.cuePlan)
   App.live:setPlan(App.coachPlan)
@@ -124,6 +154,7 @@ local function refreshBenchmark()
     App.lessonLabel = App.coachLabel
     App.lesson:rebase()
   end
+  App.lesson.allowPush = App.coachPlan ~= nil
 end
 
 -- Start-up ------------------------------------------------------------------
@@ -244,6 +275,51 @@ local function lessonLine(sum)
   return table.concat(parts, ' ')
 end
 
+-- Everything the session report needs, as plain values.
+function App.reportData()
+  local lesson, corners = App.lesson, App.track and App.track.corners or {}
+  local d = {
+    version = App.version, track = App.trackId, car = App.carId, date = Sim.dateText(Sim.now()),
+    laps = App.lapNumber, valid = App.validLaps or 0, bestMs = App.best and App.best.timeMs,
+    benchLabel = S.benchmark[App.benchLabel or App.coachLabel or ''], limitMs = App.limitLap and App.limitLap.timeMs,
+    benchMs = App.benchmark and App.benchmark.timeMs, lastError = App.lastError,
+    skills = {}, stages = {}, fixed = {}, corners = {}, said = {}, mistakes = {}, missing = {},
+  }
+  if App.level then d.level = { name = S.level[App.level.id], ratio = App.level.ratio } end
+  if lesson then
+    local skills = lesson:skills()
+    for _, id in ipairs(S.skills.order) do d.skills[#d.skills + 1] = { name = S.skills[id], value = skills[id] } end
+    for _, st in ipairs(lesson:stages()) do
+      d.stages[#d.stages + 1] = { name = S.stage[st.id].name, done = st.done,
+        line = string.format(S.stage[st.id].line, st.have, st.need) }
+    end
+    local f = lesson.focus
+    if f and corners[f.k] then
+      d.focus = { corner = corners[f.k].name, text = remedyText(f.id, f.value), tries = f.tries }
+    end
+    for _, done in ipairs(lesson.fixed) do
+      d.fixed[#d.fixed + 1] = { corner = corners[done.k] and corners[done.k].name or '?', fromMs = done.fromMs, toMs = done.toMs }
+    end
+    for _, row in ipairs(lesson:ranking()) do
+      d.corners[#d.corners + 1] = {
+        name = corners[row.k] and corners[row.k].name or '?', typicalMs = row.typicalMs,
+        cause = row.id and S.remedy[row.id] and S.remedy[row.id].short or nil,
+        lastMs = row.lastMs, bestMs = row.bestMs, passes = row.passes, steadyM = row.steady and row.steady.brakeM or nil,
+      }
+    end
+  end
+  for id, count in pairs(App.liveCounts) do d.said[#d.said + 1] = { text = S.live[id].text:lower(), count = count } end
+  table.sort(d.said, function(a, b) return a.text < b.text end)
+  for _, id in ipairs(Mistakes.PRIORITY) do
+    if App.mistakeCounts[id] then d.mistakes[#d.mistakes + 1] = { title = S.tips[id].title, count = App.mistakeCounts[id] } end
+  end
+  if App.limitEnv then d.grip = { lat = App.limitEnv.lat, brake = App.limitEnv.brake } end
+  for _, row in ipairs(Sim.report) do
+    if not row.ok then d.missing[#d.missing + 1] = row.name end
+  end
+  return d
+end
+
 -- Keeps one line of numbers per session, so progress shows across days.
 local function saveHistory()
   if not App.lesson then return end
@@ -256,8 +332,10 @@ local function saveHistory()
   for key, value in pairs(App.lesson:summary()) do entry[key] = value end
   entry.laps, entry.valid = App.lapNumber, App.validLaps or 0
   entry.best = App.sessionBestMs
+  entry.pace = App.level and (App.level.ratio * 1000) or nil
   entry.bench = App.benchmark and App.benchmark.timeMs or nil
   App.reference:saveHistory(App.trackId, App.carId, App.history, config.lesson.historyKeep)
+  App.reportSaved = App.reference:saveReport(App.trackId, App.carId, Report.build(App.reportData()))
 end
 
 local function finishLap(lap, s)
@@ -297,17 +375,28 @@ local function finishLap(lap, s)
     App.data.laps.best = lap
     local saved = App.reference:saveCombo(App.data)
     App.lastSave = saved and ('saved ' .. time) or 'could not be saved (see the data folder in Settings)'
-    local wasLabel = App.benchLabel
+    local wasLabel, wasLevel = App.benchLabel, App.levelIdx
     refreshBenchmark()
     local body = best and ('Faster by ' .. U.formatDelta(best.timeMs - lap.timeMs):sub(2) .. ' s.')
       or 'From now on the HUD can compare you with this lap.'
-    if App.benchLabel == 'you' and wasLabel and wasLabel ~= 'you' then
+    if App.benchLabel == 'limit' and wasLabel and wasLabel ~= 'limit' then
       body = S.status.teacherBeaten
+    end
+    local level = App.level
+    local levelUp = level and wasLevel and level.index > wasLevel
+    if level then App.levelIdx = level.index end
+    if levelUp then
+      body = string.format(S.level.up, S.level[level.id]) .. '. ' .. body
     end
     showTip({ title = (best and S.status.newBest or S.status.firstBest) .. '  ' .. time,
       body = withAdvice(body), good = true, rank = 40 }, advice and 8 or 6)
-    if App.settings.voice then Voice.say('best_lap', App.settings.voiceVolume) end
+    if App.settings.voice then
+      Voice.say('best_lap', App.settings.voiceVolume)
+      if levelUp then Voice.say('level_up', App.settings.voiceVolume, false, 4) end
+    end
   else
+    -- More grip found since the limit lap was worked out: it moves up.
+    if App.benchLabel == 'limit' and App.grip.version ~= App.limitGripVersion then refreshBenchmark() end
     showTip({ title = 'Lap ' .. time,
       body = withAdvice(U.formatDelta(lap.timeMs - best.timeMs) .. ' s to your best.'), rank = 60 },
       advice and 8 or 5)
@@ -389,6 +478,8 @@ local function judgeCorner(k)
   res.corner, res.at = c, App.clock
   res.text = coachText(res, App.settings.mph)
   App.cornerResults[k] = res
+  App.lastPass = App.lastPass or {}
+  App.lastPass[k] = sl                       -- for the speed trace in the panel
 
   local verdict = App.lesson:record(k, res, Coach.detail(ref, got, { wideM = wide, offTrack = offTrack }))
   res.verdict = verdict
@@ -400,7 +491,16 @@ local function judgeCorner(k)
     -- The corner being worked on: always say how this attempt went.
     if verdict.prevMs then title = title .. '  (was ' .. U.formatDelta(verdict.prevMs) .. ')' end
     local kind, body, good = verdict.kind, res.text, res.good
-    if kind == 'parked' then
+    if kind == 'steadyOn' then
+      body, good = remedyText('steady', App.lesson.focus and App.lesson.focus.value) or res.text, false
+    elseif kind == 'pushed' or kind == 'pushGain' or kind == 'steadyDone' then
+      body, good = S.lesson[kind], true
+      local nxt = verdict.next
+      if nxt and S.remedy[nxt.id] then
+        body = body .. ' ' .. string.format(S.lesson.nextUp, App.track.corners[nxt.k].name, S.remedy[nxt.id].short)
+      end
+      if kind == 'pushGain' and say then Voice.say('nice', vol, false, 1.5) end
+    elseif kind == 'parked' then
       body, good = S.lesson.parked, false
       local nxt = verdict.next
       if nxt and S.remedy[nxt.id] then
@@ -448,20 +548,25 @@ local function settleCorner(k)
   if not sl then return end
   res.lossMs = sl.timeMs - ref.timeMs
   local verdict = App.lesson:settle(k, sl.timeMs, res.lossMs, res.id ~= 'offTrack')
-  if not (verdict and verdict.kind == 'fixed' and App.settings.lessons) then return end
-  -- The corner being worked on is sorted: say so, and name the next one.
+  if not (verdict and App.settings.lessons) then return end
+  -- The corner being worked on is sorted (or put aside): say so, and name the next one.
   local corners = App.track.corners
-  local body = S.lesson.fixed
+  local fixed = verdict.kind == 'fixed'
+  local body = fixed and S.lesson.fixed or S.lesson.parked
   local nxt = verdict.next
   if nxt and S.remedy[nxt.id] then
     body = body .. ' ' .. string.format(S.lesson.nextUp, corners[nxt.k].name, S.remedy[nxt.id].short)
   end
-  App.praiseAt = App.clock
-  if App.settings.showTips then
-    showTip({ title = string.format(S.lesson.sorted, corners[k].name) .. '  ' .. U.formatDelta(verdict.fromMs)
-      .. ' to ' .. U.formatDelta(verdict.toMs) .. ' s', body = body, good = true, rank = 15 }, config.coach.showS + 2)
+  local title = corners[k].name
+  if fixed then
+    title = string.format(S.lesson.sorted, corners[k].name) .. '  ' .. U.formatDelta(verdict.fromMs)
+      .. ' to ' .. U.formatDelta(verdict.toMs) .. ' s'
+    App.praiseAt = App.clock
   end
-  if App.settings.voice and App.settings.praise then Voice.say('fixed', App.settings.voiceVolume, false, 2) end
+  if App.settings.showTips then
+    showTip({ title = title, body = body, good = fixed, rank = 15 }, config.coach.showS + 2)
+  end
+  if fixed and App.settings.voice and App.settings.praise then Voice.say('fixed', App.settings.voiceVolume, false, 2) end
 end
 
 -- One frame -----------------------------------------------------------------

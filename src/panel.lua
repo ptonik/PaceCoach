@@ -103,10 +103,60 @@ local function historyLine(index, entry, previous)
   if entry.best and entry.bench then
     parts[#parts + 1] = U.formatDelta(entry.best - entry.bench) .. ' s to the benchmark'
   end
+  if entry.pace then parts[#parts + 1] = string.format('%.1f%% of the limit', entry.pace / 10) end
   if entry.laps then
     parts[#parts + 1] = string.format('%d laps, %d clean', entry.laps, entry.valid or 0)
   end
   return table.concat(parts, '   ')
+end
+
+-- Speed through corner k on the last pass, against the benchmark: the
+-- picture a coach would put in front of you. Red strips underneath show
+-- where each of the two was on the brake.
+local trace = {}
+local function traceChart(app, k, W)
+  local plan = app.coachPlan
+  local ref, got = plan and plan.exitSlices[k], app.lastPass and app.lastPass[k]
+  if not (ref and got and Sim.has['ui.getCursor'] and Sim.has['ui.offsetCursorY']) then return end
+  local cur = ui.getCursor()
+  local x0, y0, w, h = cur.x, cur.y, W - cur.x * 2, 104
+  local count = math.min(ref.count, got.count)
+  local total = ref.dist[count]
+  if w < 160 or count < 8 or not total or total <= 0 then return end
+  local vmin, vmax = math.huge, -math.huge
+  for j = 1, count do
+    vmin = math.min(vmin, ref.v[j], got.v[j])
+    vmax = math.max(vmax, ref.v[j], got.v[j])
+  end
+  if vmax - vmin < 1 then vmax = vmin + 1 end
+  G.rect(x0, y0, x0 + w, y0 + h, C.cardBg, 4)
+  local left, right, top, bottom = x0 + 8, x0 + w - 8, y0 + 20, y0 + h - 16
+  local step = math.max(1, math.floor(count / 110))
+  local function line(sl, color, thickness)
+    local n = 0
+    for j = 1, count, step do
+      n = n + 1
+      trace[n * 2 - 1] = left + (right - left) * sl.dist[j] / total
+      trace[n * 2] = bottom - (bottom - top) * (sl.v[j] - vmin) / (vmax - vmin)
+    end
+    G.polyline(trace, n, color, thickness, false)
+  end
+  local function brakes(sl, y, color)
+    for j = 1, count - step, step do
+      if sl.brake[j] > 0.1 then
+        G.rect(left + (right - left) * sl.dist[j] / total, y,
+          left + (right - left) * sl.dist[math.min(count, j + step)] / total, y + 3, color, 0)
+      end
+    end
+  end
+  line(ref, C.cyan, 1.5)
+  line(got, C.white, 2)
+  brakes(ref, y0 + h - 12, C.pedalDimRed)
+  brakes(got, y0 + h - 7, C.red)
+  local name = app.track.corners[k] and app.track.corners[k].name or ''
+  G.text(string.format('%s speed: white you, blue %s. %d to %d km/h', name, S.benchmark[app.coachLabel] or 'benchmark',
+    U.round(vmin), U.round(vmax)), 11, x0 + 8, y0 + 4, C.dim)
+  ui.offsetCursorY(h + 8)
 end
 
 local function coachTab(app, W)
@@ -129,6 +179,16 @@ local function coachTab(app, W)
   else
     line('Coaching against ' .. (S.who[app.coachLabel] or 'the benchmark')
       .. '   ' .. U.formatLap(app.coachPlan.lap.timeMs), C.green)
+    local level = app.level
+    if level and app.limitLap then
+      line(string.format(S.level.line, S.level[level.id], level.ratio * 100, U.formatLap(app.limitLap.timeMs)), C.cyan)
+      if level.nextId then
+        ui.text(string.format(S.level.next, S.level[level.nextId], level.nextMs / 1000))
+      else
+        ui.text(S.level.top)
+      end
+      line(S.level.why, C.dim)
+    end
     gap()
     line(S.lesson.focusTitle, C.dim)
     local f = lesson.focus
@@ -139,6 +199,8 @@ local function coachTab(app, W)
       line(string.format('%s  %s %s   typically %s s', c.name, S.severityLower[c.severity],
         S.dirLower[c.dir], U.formatDelta(f.baseMs)), C.cyan)
       paragraph(app.remedyText(f.id, f.value) or '', W)
+      for _, how in ipairs(S.howto[f.id] or {}) do paragraph('- ' .. how, W) end
+      traceChart(app, f.k, W)
       ui.text(string.format('Attempts: %d   good in a row: %d of %d', f.tries, f.streak,
         config.lesson.masterStreak))
     else
@@ -198,9 +260,12 @@ local function coachTab(app, W)
       elseif row.typicalMs < config.lesson.minFocusMs then
         color = C.green
       end
-      line(string.format('%s   %s s   %s   (last %s, best %s, %d passes)', c and c.name or '?',
-        U.formatDelta(row.typicalMs), cause, U.formatDelta(row.lastMs), U.formatDelta(row.bestMs), row.passes),
-        color)
+      local text = string.format('%s   %s s   %s   (last %s, best %s, %d passes)', c and c.name or '?',
+        U.formatDelta(row.typicalMs), cause, U.formatDelta(row.lastMs), U.formatDelta(row.bestMs), row.passes)
+      if row.steady and row.steady.brakeM >= config.lesson.steadyBrakeM then
+        text = text .. string.format('   brake point moves %d m', U.round(row.steady.brakeM))
+      end
+      line(text, color)
     end
     local said = {}
     for id, count in pairs(app.liveCounts) do
@@ -214,6 +279,11 @@ local function coachTab(app, W)
     end
   end
 
+  if app.reportSaved and app.reference then
+    gap()
+    line('A report of this session is written after every lap:', C.dim)
+    paragraph(app.reference:reportPath(app.trackId, app.carId), W)
+  end
   gap()
   line('Sessions with this car and track', C.dim)
   local history = app.history
@@ -250,7 +320,7 @@ local function teacherTab(app, W)
       ui.text('Your best ' .. U.formatLap(app.best.timeMs) .. '   gap '
         .. U.formatDelta(app.best.timeMs - bench.timeMs) .. ' s')
     end
-    if label == 'you' then paragraph(S.status.teacherBeaten, W) end
+    if label == 'limit' then paragraph(S.status.teacherBeaten, W) end
   else
     line('No teacher lap yet.', C.orange)
     paragraph('To get one, start a session with one to three AI opponents in the same car as you '

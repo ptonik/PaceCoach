@@ -122,6 +122,7 @@ function Metrics.measure(sl, track, c, seg, cfg)
       q = q - 1
     end
     m.brakeStartJ, m.brakeEndJ = startJ, k
+    m.brakeEndRelM = sl.dist[k] - sl.dist[sJ]        -- positive: still braking past turn-in
     m.brakeCell = sl.cell[startJ]
     m.brakeRelM = sl.dist[startJ] - sl.dist[sJ]      -- negative: before turn-in
     m.brakeKmh = sl.v[startJ]

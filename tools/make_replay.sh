@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT="${1:-docs/replay.html}"
-LAPS="${2:-8}"
+LAPS="${2:-20}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

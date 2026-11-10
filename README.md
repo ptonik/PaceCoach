@@ -28,9 +28,15 @@ are new to sim racing and do not know the tracks yet.
   card before you arrive, and a speed bar against the teacher at all times.
 - **A driving line on the track**, red where the teacher brakes and green
   where it is on full throttle.
-- **Keeps score of your progress**: skill scores for braking points, corner
-  speed, exits, line and consistency, five training steps to tick off, your
-  ideal lap, and a line per session so you can see the trend over days.
+- **Does not stop when you beat the teacher.** From then on it coaches you
+  against the **limit lap**: the fastest lap along your own line that the
+  car's grip, as seen so far, allows. When no time is being lost any more it
+  sends you looking for more grip, one corner at a time, and the limit moves
+  up when you find it.
+- **Keeps score of your progress**: a pace level from Rookie to On the limit,
+  skill scores for braking points, corner speed, exits, line and consistency,
+  five training steps to tick off, your ideal lap, and a line per session so
+  you can see the trend over days.
 
 **And it keeps itself up to date**: it fetches new versions from this
 repository by itself.
@@ -41,10 +47,12 @@ repository by itself.
 what the app drew; the track view is a stand-in for the game.
 `tools/make_replay.sh` builds the page.*
 
-> **Status (0.4.0): early release.** The logic is covered by automated tests,
-> and the whole app runs against a stand-in for the game in which a simulated
-> learner is coached from 3.7 s off the teacher to 0.8 s off in eight laps.
-> It has had very little time in the real game. Expect rough edges, and
+> **Status (0.6.0): early release.** The logic is covered by automated tests,
+> and the whole app runs against a stand-in for the game. In that simulation
+> a learner who starts 3.7 s off the teacher beats it on lap 12 and is within
+> 0.3% of what the simulated car can really do after 45 laps. That shows the
+> coaching logic holds together; it says nothing yet about a human driver.
+> The app has had very little time in the real game. Expect rough edges, and
 > please report them with the Diagnostics screenshot described below.
 
 ## What you need
@@ -123,8 +131,11 @@ If an AI driver later sets a faster clean lap, it replaces the old one.
 **Panel → Teacher** shows which benchmark is in use, your gap to it, your last
 pass through every corner, and the target for every corner.
 
-If you beat the teacher, your own best lap becomes the benchmark. Without any
-teacher, the coach compares you with your own best lap once you have one.
+If you beat the teacher, the limit lap becomes the benchmark (see "Past the
+teacher" below). Without any teacher, the coach works against the limit lap
+built on your own best lap as soon as you have one: it asks every corner for
+the grip you showed in your best one. The brake cue stays with the cautious
+estimate until there is a teacher.
 
 ### A lap from a faster friend
 
@@ -247,6 +258,13 @@ deliberately cautious.
   the coach names the next one. "Good" is judged over the whole stretch from
   the straight before to the straight after, so a slow exit cannot hide.
   After five tries with no progress the corner is put aside for a while.
+- **How to do it.** Under the instruction are two or three lines on the
+  technique, and a **speed trace** of your last pass through the focus corner
+  against the benchmark, with the braking of both marked underneath.
+- **Same thing every lap.** When no corner is losing much but your brake
+  point in one of them moves around by more than 15 m from lap to lap, that
+  becomes the lesson: pick a marker and use it. Being repeatable comes before
+  being faster.
 - **Training steps**, in the order a beginner should take them: stay on the
   track, brake at the right place, carry the speed, get on the power, be
   consistent. Each shows how far along you are.
@@ -255,6 +273,45 @@ deliberately cautious.
   added up. It is a lap you have already driven, only not in one go.
 - **Where the time goes**: every corner, biggest typical loss first.
 - **Sessions**: one line per session with this car and track.
+
+## The session report
+
+After every lap the app writes the session up as plain text in
+`Documents\Assetto Corsa\PaceCoach\<track>__<car>.report.txt`: laps, best
+lap, benchmark, pace level, the focus corner, where the time goes, skills,
+what the coach said, mistakes, the grip it has seen, and anything the game
+build is missing. Panel → Coach shows the exact path. It is the file to send
+when you want a second opinion on your driving, or when something looks
+wrong.
+
+## Past the teacher
+
+The AI is a decent driver, not a great one. Once your best lap is faster than
+every real lap the app has, it stops comparing you with a lap somebody drove
+and builds one instead.
+
+- **The limit lap** follows the line of your own best lap. Its speed comes
+  from the most cornering, braking and acceleration this car has been seen to
+  produce: by the teacher, by a friend's lap, and by the grip meter while you
+  drive. Braking and turning share the tyre, so it brakes into the corner the
+  way a fast driver does. It is never slower than your real lap anywhere, and
+  never more than 8% faster at any point.
+- **"Find the limit."** When no corner is losing time against it, the coach
+  picks a corner and asks for a little more: brake a touch later, carry a
+  little more speed. Two tries, then the next corner.
+- **The limit moves.** Corner harder than anything seen before and the limit
+  lap rises in every corner of that speed range, which gives the coach new
+  losses to work on. The ladder has no top rung you can stand on.
+- **Trail braking.** When the benchmark keeps the brake on into the corner
+  and you let go early, the feedback says so.
+- **Pace level** (Panel → Coach): your best lap as a share of the limit lap.
+  Rookie, Novice (within 10%), Club racer (6%), Front runner (3%), Expert
+  (1.5%), On the limit (0.5%).
+
+What this is not: a world record. The limit lap only knows the grip somebody
+has actually shown in this car. To be measured against a truly fast driver,
+drop their lap file in (see "A lap from a faster friend"); the limit is then
+built from their grip too.
 
 ## How to practise with it
 
@@ -315,7 +372,7 @@ game. With LuaJIT installed:
 ```
 luajit tests/run.lua            # logic tests
 luajit tests/smoke.lua          # whole app against a stand-in for the game
-luajit tests/story.lua 8        # prints what the coach says to a simulated learner, lap by lap
+luajit tests/story.lua 45       # prints what the coach says to a simulated learner, lap by lap
 tools/make_replay.sh out.html   # the same session as a page you can watch (needs ffmpeg, python3)
 tools/make_voice.sh [voice]     # regenerate the voice clips (macOS)
 luajit tools/make_update.lua "what is new"   # refresh update.txt before a commit

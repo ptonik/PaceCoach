@@ -16,7 +16,7 @@ local U = require('src/util')
 local realIo = io
 
 local target = arg and arg[1] or 'replay.json'
-local wantLaps = tonumber(arg and arg[2]) or 8
+local wantLaps = tonumber(arg and arg[2]) or 20
 local EVERY = 4                       -- keep one frame in four: 15 per second
 
 -- What each clip says, for the captions (the same words tools/make_voice.sh speaks).
@@ -143,7 +143,7 @@ app, state, laps, world = Story.run({
     end
     current = {}
     st.window.x, st.window.y = 460, 310
-    teacher = teacher or (a.coachPlan and a.coachPlan.lap)
+    teacher = teacher or a.teacherLap
     lapStart[lapIndex] = lapStart[lapIndex] or clock
   end,
   afterDraw = function(a, st, s, lapIndex)
@@ -173,9 +173,11 @@ app, state, laps, world = Story.run({
   onLap = function(a, _, lapNumber, lapMs)
     local f = a.lesson.focus
     local c = f and a.track.corners[f.k]
-    lapRows[#lapRows + 1] = string.format('{"n":%d,"ms":%d,"t0":%s,"focus":%s,"fixed":%d}', lapNumber, U.round(lapMs),
+    local lv = a.level
+    lapRows[#lapRows + 1] = string.format('{"n":%d,"ms":%d,"t0":%s,"focus":%s,"vs":%s,"level":%s}', lapNumber, U.round(lapMs),
       num(lapStart[lapNumber] or 0),
-      f and str(c.name .. ': ' .. S.remedy[f.id].short) or 'null', #a.lesson.fixed)
+      f and str(c.name .. ': ' .. S.remedy[f.id].short) or 'null',
+      str(S.benchmark[a.coachLabel] or '-'), lv and str(S.level[lv.id]) or 'null')
   end,
 })
 assert(not app.lastError, app.lastError)
@@ -201,6 +203,7 @@ end
 local out = {
   '{"fps":', num(60 / EVERY), ',"version":', str(app.version), ',"lengthM":', num(world.lengthM),
   ',"teacherMs":', tostring(U.round(teacher.timeMs)),
+  ',"carMs":', tostring(U.round(Story.carLimitMs(world))),
   ',"hud":[460,310]',
   ',"palette":[', table.concat(paletteList, ','), ']',
   ',"track":[', table.concat(pts, ','), ']',
