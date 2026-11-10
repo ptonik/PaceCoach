@@ -148,6 +148,87 @@ local function cornerCard(app, W, s)
   return h + 6 * s
 end
 
+-- The corner ahead as a strip, from a little before the brake point to the
+-- exit: the benchmark's braking (red) and throttle (green) as shapes to
+-- follow, your own pedals drawn over them as you go, marks for Brake, Turn
+-- in, Apex and eXit, and a white line where the car is now.
+local function cornerStrip(app, W, s, y)
+  local plan, k = app.coachPlan, app.segIdx
+  if not (app.settings.cornerStrip and plan and k and app.track) then return y end
+  local sl, tg, seg = plan.exitSlices[k], plan.exitTargets[k], app.segs[k]
+  if not (sl and tg and seg) then return y end
+  local track = app.track
+  local n = track.n
+  local cell = (math.floor((app.car.pos or 0) * n) % n) + 1
+  local jCar = U.forward(seg.from, cell, n) + 1
+  local j0 = math.max(1, (tg.brakeStartJ or tg.sJ) - math.floor(120 / track.cellM))
+  local j1 = sl.count
+  if jCar < j0 or jCar > j1 or j1 - j0 < 8 then return y end
+  local span = sl.dist[j1] - sl.dist[j0]
+  if span <= 0 then return y end
+
+  local h = 70 * s
+  G.rect(0, y, W, y + h, C.cardBg, 8 * s)
+  local left, right = 14 * s, W - 14 * s
+  local function X(j) return left + (right - left) * (sl.dist[j] - sl.dist[j0]) / span end
+  local laneH = 17 * s
+  local brakeTop, gasTop = y + 18 * s, y + 18 * s + laneH + 5 * s
+  G.rect(left, brakeTop, right, brakeTop + laneH, C.barBg, 2 * s)
+  G.rect(left, gasTop, right, gasTop + laneH, C.barBg, 2 * s)
+
+  -- The benchmark's shapes.
+  local step = math.max(1, math.ceil((j1 - j0) / 64))
+  for j = j0, j1 - 1, step do
+    local x0, x1 = X(j), X(math.min(j1, j + step))
+    local b, g = sl.brake[j] or 0, sl.gas[j] or 0
+    if b > 0.03 then G.rect(x0, brakeTop + laneH * (1 - b), x1, brakeTop + laneH, C.pedalDimRed, 0) end
+    if g > 0.03 then G.rect(x0, gasTop + laneH * (1 - g), x1, gasTop + laneH, C.pedalDimGreen, 0) end
+  end
+
+  -- Your own pedals so far: a bright bar at the level of your foot.
+  local lap = app.recorder and app.recorder.lap
+  if lap then
+    local thick = 1.5 * s
+    for j = j0, math.min(jCar, j1) - 1, step do
+      local c0 = sl.cell[j]
+      local b, g = lap.brake[c0], lap.gas[c0]
+      if b then
+        local x0, x1 = X(j), X(math.min(j1, j + step))
+        local yb = brakeTop + laneH * (1 - U.clamp(b, 0, 1))
+        local yg = gasTop + laneH * (1 - U.clamp(g or 0, 0, 1))
+        G.rect(x0, math.max(brakeTop, yb - thick), x1, math.min(brakeTop + laneH, yb + thick), C.white, 0)
+        G.rect(x0, math.max(gasTop, yg - thick), x1, math.min(gasTop + laneH, yg + thick), C.white, 0)
+      end
+    end
+  end
+
+  -- Marks, and where the car is.
+  local function mark(j, letter)
+    if not j or j < j0 or j > j1 then return end
+    local x = X(j)
+    G.rect(x - 0.5 * s, y + 14 * s, x + 0.5 * s, gasTop + laneH, C.faint, 0)
+    G.text(letter, 11 * s, x - 3 * s, y + 2 * s, C.dim)
+  end
+  local info = app.live and app.live.info[k]
+  mark(tg.brakeStartJ, 'B')
+  mark(info and info.turnCell and (U.forward(seg.from, info.turnCell, n) + 1) or tg.sJ, 'T')
+  mark(tg.minJ, 'A')
+  mark(tg.eJ, 'X')
+  local xCar = X(math.min(jCar, j1))
+  G.rect(xCar - s, y + 14 * s, xCar + s, gasTop + laneH + 2 * s, C.white, 0)
+
+  -- The number that matters most: the slowest speed, before and after.
+  local note
+  if jCar <= tg.minJ then
+    note = 'target ' .. speedText(tg.minKmh, app.settings.mph)
+  elseif lap and lap.v[tg.minCell] then
+    local diff = lap.v[tg.minCell] - tg.minKmh
+    note = string.format('apex %+d %s', U.round(app.settings.mph and diff * 0.621371 or diff), app.settings.mph and 'mph' or 'km/h')
+  end
+  if note then G.text(note, 12 * s, left, y + 2 * s, C.white) end
+  return y + h + 6 * s
+end
+
 -- The instruction for the corner being worked on, shown while it is the
 -- next corner.
 local function focusRow(app, W, s, y)
@@ -284,6 +365,7 @@ function Hud.draw(app)
   end
 
   if app.card and app.card.ready and app.state == 'ready' then
+    y = cornerStrip(app, W, s, y)
     y = focusRow(app, W, s, y)
     y = paceRow(app, W, s, y)
   end

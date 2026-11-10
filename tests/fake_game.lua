@@ -40,7 +40,7 @@ function Fake.install(opts)
   for _, name in ipairs(opts.remove or {}) do removed[name] = true end
   local state = {
     logs = {}, plays = {}, texts = {}, calls = 0, store = opts.store or {},
-    jumpCallbacks = {}, sessionCallbacks = {}, click = nil, dirs = {},
+    jumpCallbacks = {}, sessionCallbacks = {}, click = nil, dirs = {}, loads = {}, buttons = {},
   }
   Fake.state = state
 
@@ -224,6 +224,27 @@ function Fake.install(opts)
     onSessionStart = function(cb) need(type(cb) == 'function', 'onSessionStart') state.sessionCallbacks[#state.sessionCallbacks + 1] = cb end,
     log = function(msg) state.logs[#state.logs + 1] = tostring(msg) end,
     unloadApp = function() state.unloaded = (state.unloaded or 0) + 1 end,
+    saveCarStateAsync = function(cb)
+      need(type(cb) == 'function', 'saveCarStateAsync callback')
+      local token = 'carstate:' .. tostring(state.frame)
+      state.pending[#state.pending + 1] = function()
+        if state.noSave then cb('not allowed', nil) else cb(nil, token) end
+      end
+    end,
+    loadCarState = function(a, b, mix, frames)
+      need(type(a) == 'string' and type(b) == 'string' and isNum(mix) and isNum(frames), 'loadCarState arguments')
+      need(a:match('^carstate:%d+$'), 'loadCarState needs a state the game produced')
+      state.loads[#state.loads + 1] = tonumber(a:match('%d+'))
+      for _, cb in ipairs(state.jumpCallbacks) do cb(0) end
+    end,
+    isCarResetAllowed = function() return state.resetAllowed ~= false end,
+    ControlButton = function(name)
+      need(type(name) == 'string' and name ~= '', 'button name')
+      return {
+        down = function() return state.buttons[name] == true end,
+        control = function(_, size) state.bindWidgets = (state.bindWidgets or 0) + 1 end,
+      }
+    end,
   }))
 
   -- web -----------------------------------------------------------------------

@@ -2,7 +2,7 @@
 -- These are starting values; they are meant to be tuned after real laps.
 
 return {
-  version = '0.8.0',
+  version = '0.9.0',
 
   grid = {
     cellM = 2,          -- target cell length along the track
@@ -192,6 +192,7 @@ return {
     stepFrac = 0.5,          -- ask for half the gap at a time
     stepMinM = 5,
     stepMaxM = 25,
+    brakeBackM = 10,         -- after missing the corner the personal brake marker comes back this far
     praiseGapS = 12,
     -- Skill scores, 0..100.
     brakePerM = 2.5,
@@ -239,6 +240,30 @@ return {
       { id = 'expert', within = 1.015 },
       { id = 'limit', within = 1.005 },
     },
+  },
+
+  -- Corner repeat: go back and try the focus corner again.
+  drill = {
+    saveBeforeCells = 5,     -- an attempt starts this many cells before the corner's stretch of track
+    endMarginM = 15,         -- ...and ends this far past the point where the corner is judged
+    pauseS = 1.2,            -- time to read the result before the car is put back
+    minKmh = 40,
+    stuckKmh = 15,           -- slower than this for a while inside the corner: go again
+    stuckS = 3,
+  },
+
+  -- The lead car to follow, and the cones.
+  ghost = {
+    leadS = 1.2,             -- how far ahead of you the benchmark car is shown, in its own time
+    minKmh = 30,
+    minGapM = 6,
+    lengthM = 4.4, widthM = 1.8, heightM = 1.1,
+  },
+  cones = {
+    aheadM = 260,
+    boardWidthM = 1.1, boardHeightM = 1.5,
+    coneM = 0.9,
+    stripeM = 0.4,
   },
 
   -- The spotter: cars alongside, and traffic close ahead.

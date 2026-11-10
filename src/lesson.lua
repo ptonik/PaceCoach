@@ -156,6 +156,17 @@ function Lesson:record(k, res, detail)
   c.count = c.count + 1
   self.passTotal = self.passTotal + 1
 
+  -- The personal brake marker: a step later than where you just braked, never
+  -- later than the benchmark, and back a bit after missing the corner.
+  if detail and detail.braking then
+    if res.id == 'offTrack' or res.id == 'brakeLate' then
+      c.brakeTargetM = (c.brakeTargetM or 0) + cfg.brakeBackM
+    elseif detail.brakeDiffM then
+      local d = detail.brakeDiffM
+      c.brakeTargetM = (d > 0) and math.max(0, d - Lesson.stepM(d, cfg)) or 0
+    end
+  end
+
   local verdict = { k = k, nowMs = loss, prevMs = prev and prev.exitMs or nil, kind = 'first' }
   if prev then
     local change = loss - prev.exitMs
@@ -297,6 +308,13 @@ function Lesson:steadiness(k)
   end
   if used < cfg.steadyOf then return nil end
   return { brakeM = hi - lo, passes = used }
+end
+
+-- Where to brake for corner k next time, in metres before the benchmark's
+-- brake point (0 = at it), or nil before the corner has been driven.
+function Lesson:brakeTargetM(k)
+  local c = self.corners[k]
+  return c and c.brakeTargetM or nil
 end
 
 -- How big a step to ask for when a brake point has to move: half the gap,

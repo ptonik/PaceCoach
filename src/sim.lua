@@ -41,6 +41,7 @@ local AC_OPTIONAL = {
   'trackProgressToWorldCoordinate', 'hasTrackSpline', 'getTrackFullID', 'getTrackID',
   'getCarID', 'getFolder', 'FolderID', 'storage', 'AudioEvent', 'onCarJumped',
   'onSessionStart', 'log', 'getTrackAISplineSides', 'unloadApp',
+  'saveCarStateAsync', 'loadCarState', 'isCarResetAllowed', 'ControlButton',
 }
 local WEB_OPTIONAL = { 'get' }
 local RENDER_OPTIONAL = { 'quad', 'setBlendMode', 'setDepthMode', 'BlendMode', 'DepthMode' }
@@ -302,6 +303,42 @@ function Sim.loadFile(path)
   if not Sim.has['io.load'] then return nil end
   local ok, text = pcall(io.load, path)
   if ok and type(text) == 'string' and text ~= '' then return text end
+  return nil
+end
+
+-- Corner repeat ---------------------------------------------------------------
+
+-- Can the car be put back where it was? Only in offline practice, and only
+-- when this CSP build can save and restore a car's state.
+function Sim.canRepeat()
+  if not (Sim.has['ac.saveCarStateAsync'] and Sim.has['ac.loadCarState']) then return false end
+  if Sim.has['ac.isCarResetAllowed'] then
+    local ok, allowed = pcall(ac.isCarResetAllowed)
+    return ok and allowed == true
+  end
+  return true
+end
+
+-- Asks the game for the car's state. callback(data) gets nil if it failed.
+function Sim.saveState(callback)
+  local ok = pcall(ac.saveCarStateAsync, function(err, data)
+    local okCall, why = pcall(callback, (not err) and data or nil)
+    if not okCall then Sim.log('state handler failed: ' .. tostring(why)) end
+  end)
+  if not ok then callback(nil) end
+end
+
+-- Puts the car back into a saved state. Returns false if the game refused.
+function Sim.loadState(data)
+  return (pcall(ac.loadCarState, data, data, 0, 30))
+end
+
+-- A button the driver can bind in the panel (to a wheel button, say).
+-- Returns an object with :down() and :control(size), or nil.
+function Sim.button(name)
+  if not Sim.has['ac.ControlButton'] then return nil end
+  local ok, button = pcall(ac.ControlButton, name)
+  if ok and button then return button end
   return nil
 end
 

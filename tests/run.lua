@@ -1827,6 +1827,100 @@ test('the licence ladder asks for pace and for repeating it', function()
   eq(pro.next, nil)
 end)
 
+-- In the passenger seat ---------------------------------------------------------
+
+print('corner repeat, lead car, brake marker')
+local Drill = require('src/drill')
+local Ghost = require('src/ghost')
+test('corner repeat: remember the car on the way in, put it back after the exit', function()
+  local drill = Drill.new(config.drill)
+  local inp = { on = true, k = 2, n = 1000, saveCell = 300, endCell = 420, speedKmh = 150, steady = true }
+  local function at(cell, extra)
+    inp.cell = cell
+    for key, v in pairs(extra or {}) do inp[key] = v end
+    return drill:update(inp, 1 / 60)
+  end
+  eq(at(290), nil)
+  eq(at(299), nil)
+  eq(at(301), 'save', 'as the car passes the start of the attempt')
+  eq(at(303), nil, 'only asked once')
+  drill:saved('STATE')
+  eq(drill.phase, 'run')
+  eq(drill.attempts, 1)
+  for c = 304, 420 do eq(at(c), nil) end
+  drill:record(450)
+  eq(at(421), nil, 'past the end: a moment to read the result first')
+  local action
+  for _ = 1, 200 do
+    action = at(425)
+    if action then break end
+  end
+  eq(action, 'load')
+  eq(drill.attempts, 2)
+  eq(drill.data, 'STATE', 'the same starting point every time')
+  drill:record(300)
+  eq(drill.best, 300)
+  -- Stuck in the gravel half way: go again without waiting for the exit.
+  at(350)
+  local stuck
+  for _ = 1, 400 do
+    stuck = at(360, { speedKmh = 3 })
+    if stuck then break end
+  end
+  eq(stuck, 'load')
+  inp.speedKmh = 150
+  -- Another focus corner: everything starts afresh.
+  at(500, { k = 5, saveCell = 600, endCell = 700 })
+  eq(drill.phase, 'idle')
+  eq(drill.data, nil)
+  eq(at(610), 'save')
+  drill:saved(nil)
+  eq(drill.phase, 'idle', 'a failed save is simply tried again next time round')
+  -- Switched off.
+  at(620, { on = false })
+  eq(drill.k, nil)
+  -- Not while sliding, and not at walking pace.
+  local d2 = Drill.new(config.drill)
+  local slow = { on = true, k = 1, n = 1000, saveCell = 300, endCell = 420, speedKmh = 20, steady = true, cell = 299 }
+  d2:update(slow, 1 / 60)
+  slow.cell = 301
+  eq(d2:update(slow, 1 / 60), nil)
+end)
+test('the lead car is the benchmark a moment ahead, and its brake lights are the benchmark\'s', function()
+  local c1 = track.corners[1]
+  local straight = Track.cellAt(track, (c1.endM + 120) / track.lengthM)
+  local gc, braking = Ghost.locate(teacherLap, straight, 1.2)
+  local gapM = U.forward(straight, gc, track.n) * track.cellM
+  near(gapM, teacherLap.v[straight] / 3.6 * 1.2, 6, 'about 1.2 s of travel ahead')
+  eq(braking, false)
+  -- Shortly before the benchmark's brake point the car ahead is already on the brakes.
+  local before = U.wrapIndex(bench.targets[2].brakeCell - 10, track.n)
+  local _, lights = Ghost.locate(teacherLap, before, 1.2)
+  eq(lights, true, 'brake lights come on ahead of you')
+  -- Across the start line.
+  local last, first = Ghost.locate(teacherLap, track.n - 3, 1.2)
+  check(last < 200, 'wraps into the next lap: cell ' .. last)
+  local x, z, fx, fz = Ghost.pose(teacherLap, straight)
+  near(x, teacherLap.x[straight], 1e-9)
+  near(fx * fx + fz * fz, 1, 1e-9, 'a unit direction')
+end)
+test('the personal brake marker moves a step at a time, and comes back after a miss', function()
+  local lesson = Lesson.new(2, LC)
+  eq(lesson:brakeTargetM(1), nil)
+  local function pass(id, brakeDiff)
+    lesson:record(1, res(id, 300, brakeDiff), { braking = true, brakeDiffM = brakeDiff, minDiffKmh = 0, exitDiffKmh = 0 })
+    return lesson:brakeTargetM(1)
+  end
+  eq(pass('brakeEarly', 60), 35, '60 m early: the marker asks for 25 m later')
+  eq(pass('brakeEarly', 34), 19)
+  eq(pass('brakeEarly', 12), 7)
+  eq(pass('ok', 4), 0, 'close enough: brake where the benchmark does')
+  eq(pass('offTrack', -6), 10, 'missed the corner: the marker comes back')
+  eq(pass('ok', -3), 0, 'later than the benchmark and it worked: the marker stays at the benchmark')
+  lesson:record(2, res('ok', 10), { braking = false, minDiffKmh = 0, exitDiffKmh = 0 })
+  eq(lesson:brakeTargetM(2), nil, 'no marker for a corner nobody brakes for')
+end)
+
 -- Updater -----------------------------------------------------------------------
 
 local Updater = require('src/updater')

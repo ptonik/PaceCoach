@@ -449,7 +449,7 @@ test('cars of another model are not teachers', function()
   eq(app.teacherLap, nil)
   eq(app.benchLabel, nil)
   check(app.coachPlan, 'feedback falls back to your own best lap')
-  eq(state.quads, 0, 'no line without a benchmark')
+  check(state.quads > 0, 'driving alone, the line and the lead car come from your own limit lap')
   check(sawText(state, 'No teacher lap yet'), 'the panel explains how to get one')
 end)
 
@@ -781,6 +781,91 @@ test('the session log keeps only the newest laps, and can be switched off', func
   app2.settings.sessionLog = false
   run(app2, state2, drive({ laps = 1.3 }), function() app2.settings.sessionLog = false end)
   eq(quiet[COMBO .. '.session.txt'], nil)
+end)
+
+print('in the passenger seat')
+test('corner repeat: the focus corner again and again without driving the lap', function()
+  local files = Story.storeWithTeacher(world)
+  Fake.unload()
+  local state = Fake.install({ track = world, appDir = root, store = files })
+  dofile(root .. '/PaceCoach.lua')
+  local app = package.loaded['src/app']
+  local markers = package.loaded['src/markers']
+  local base = Story.LEARNER
+  local flaws = { [2] = { lat = 0.7 } }                 -- one weakness: far too slow through turn 2
+  local plan = Synth.plan(world, base, flaws)
+  local st, snaps = {}, {}
+  local function copy(t) local c = {} for key, v in pairs(t) do c[key] = v end return c end
+  local loadsSeen, lapsAtStart, passesAtStart, sawGhost, sawCones, sawBoard = 0, nil, nil, false, 0, false
+  local frame = 0
+  local function drive(frames, each)
+    for _ = 1, frames do
+      frame = frame + 1
+      state.frame = frame
+      local s = Synth.step(world, plan, st)
+      snaps[frame] = copy(st)
+      Fake.drive(s)
+      script.update(s.dt)
+      script.draw3D()
+      script.windowMain(s.dt)
+      if app.lastError then error('app error at frame ' .. frame .. ': ' .. app.lastError) end
+      sawGhost = sawGhost or markers.ghostShown
+      sawCones = math.max(sawCones, markers.cones)
+      if #state.loads > loadsSeen then
+        -- The game put the car back: so does the simulation, and the learner
+        -- does a little better each time.
+        loadsSeen = #state.loads
+        st = copy(snaps[state.loads[loadsSeen]])
+        flaws[2].lat = math.min(1, flaws[2].lat + 0.12)
+        plan = Synth.plan(world, base, flaws)
+        st.plan, st.blend = plan, 1
+      end
+      if each then each(s) end
+    end
+  end
+  -- A lap and a bit, so the coach has a focus corner.
+  drive(60 * 75)
+  check(app.lesson.focus and app.lesson.focus.k == 2, 'turn 2 is the focus')
+  eq(#state.loads, 0, 'nothing happens until it is switched on')
+  app.settings.repeatCorner = true
+  lapsAtStart, passesAtStart = app.lapNumber, app.lesson.corners[2].count
+  drive(60 * 90, function() if app.lesson.focus == nil or app.lesson.focus.k ~= 2 then sawBoard = true end end)
+  noErrors(app, state)
+  check(#state.loads >= 3, 'the car was put back several times: ' .. #state.loads)
+  local passes = app.lesson.corners[2].count - passesAtStart
+  check(passes >= 3, 'each attempt was judged: ' .. passes)
+  check(app.lapNumber - lapsAtStart <= 1, 'without driving laps in between: ' .. (app.lapNumber - lapsAtStart))
+  check(sawText(state, 'Try 2:'), 'attempts are numbered on the HUD')
+  check(sawText(state, 'Corner repeat: T2'), 'and the start is announced')
+  check(#app.lesson.fixed >= 1 and app.lesson.fixed[1].k == 2, 'turn 2 gets sorted by repetition')
+  check(sawText(state, 'T2 sorted'), 'and the coach says so')
+  check(sawGhost, 'the lead car was on the track')
+  check(sawCones >= 3, 'cones were out: ' .. sawCones)
+  check(sawText(state, 'target ') and sawText(state, 'apex '), 'the corner strip showed the target and the result')
+  check(app.lesson:brakeTargetM(2) ~= nil, 'a personal brake marker exists for turn 2')
+end)
+
+test('corner repeat says so where the game does not allow it, and has a button', function()
+  local app, state = session({ store = Story.storeWithTeacher(world) })
+  state.resetAllowed = false
+  run(app, state, driveAs(SLOW, { laps = 1.2 }), function()
+    if app.lesson and app.lesson.focus then app.settings.repeatCorner = true end
+  end)
+  -- the setting is refused each time it is switched on
+  check(sawText(state, 'only works in an offline practice session'), 'explained on the HUD')
+  eq(#state.loads, 0)
+  eq(app.lastError, nil)
+  -- The bound button toggles it.
+  local app2, state2 = session({ store = Story.storeWithTeacher(world) })
+  local laps = driveAs(SLOW, { laps = 1.3 })
+  run(app2, state2, laps)
+  eq(app2.settings.repeatCorner, false)
+  state2.buttons['__APP_PACECOACH_REPEAT'] = true
+  run(app2, state2, driveAs(SLOW, { laps = 0.02, startPos = 0.3 }), function() return nil end)
+  eq(app2.settings.repeatCorner, true, 'one press switches it on')
+  state2.buttons['__APP_PACECOACH_REPEAT'] = false
+  run(app2, state2, driveAs(SLOW, { laps = 0.01, startPos = 0.32 }))
+  eq(app2.settings.repeatCorner, true, 'and it stays on when the button is released')
 end)
 
 print('racing')

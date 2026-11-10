@@ -68,7 +68,7 @@ h2 {
 }
 canvas { display: block; width: 100%; max-width: 100%; border-radius: 4px; }
 #scene { aspect-ratio: 16 / 11; background: #222a26; }
-#hud { aspect-ratio: 460 / 310; background: #2c3731; }
+#hud { aspect-ratio: 460 / 390; background: #2c3731; }
 .radio { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; min-height: 104px; }
 .radio li { display: flex; gap: 10px; font-size: 15px; color: var(--screen-dim); }
 .radio li:first-child { color: var(--screen-ink); font-weight: 600; }
@@ -200,7 +200,7 @@ const AUDIO = /*AUDIO*/null;
   }
 
   // State ---------------------------------------------------------------------
-  let t = 1.75, playing = false, rate = 1, voice = true, lastStamp = 0, sayPtr = 0, nearIdx = 0;
+  let t = 4.6, playing = false, rate = 1, voice = true, lastStamp = 0, sayPtr = 0, nearIdx = 0;
   const clips = {};
   const radio = [];
 
@@ -239,7 +239,7 @@ const AUDIO = /*AUDIO*/null;
     hctx.save();
     hctx.scale(k, k);
     hctx.textBaseline = 'top';
-    for (const id of frame[DRAW]) {
+    for (const run of frame[DRAW]) for (const id of R.runs[run]) {
       const c = CALLS[id];
       switch (c[0]) {
         case 'r': hctx.fillStyle = PAL[c[5]]; rounded(hctx, c[1], c[2], c[3], c[4], c[6]); hctx.fill(); break;

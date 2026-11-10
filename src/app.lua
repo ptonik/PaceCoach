@@ -22,6 +22,7 @@ local Report = require('src/report')
 local Spotter = require('src/spotter')
 local Stint = require('src/stint')
 local Licence = require('src/licence')
+local Drill = require('src/drill')
 local Sim = require('src/sim')
 local Settings = require('src/settings')
 local Voice = require('src/voice')
@@ -50,6 +51,7 @@ local App = {
 local rs, ms, ts, other = {}, {}, {}, {}   -- reusable sample tables
 local popts, mopts, liveIn = {}, {}, {}
 local traffic = {}                          -- reusable: where the other cars are
+local drillIn = {}
 
 -- Errors --------------------------------------------------------------------
 
@@ -99,6 +101,8 @@ local function cornerNear(track, cell)
 end
 
 -- The instruction for the next attempt at a corner, from the cause of the loss.
+local settleFocus                            -- defined with the corner feedback below
+
 local function remedyText(id, value)
   local r = S.remedy[id]
   if not r then return nil end
@@ -268,6 +272,8 @@ local function init()
   App.teacher.best = App.teacherLap                 -- only a faster lap replaces a saved one
   App.grip = Grip.new(config.grip, App.reference:loadGrip(App.carId))
   App.history = App.reference:loadHistory(App.trackId, App.carId)
+  App.drill = Drill.new(config.drill)
+  App.repeatButton = Sim.button('__APP_PACECOACH_REPEAT')
   App.spotter = Spotter.new(config.spotter)
   App.stint = Stint.new(config.stint)
   App.licence = Licence.evaluate(App.licenceStats(), config.licence.grades)
@@ -608,6 +614,12 @@ local function judgeCorner(k)
   local say = App.settings.voice and App.settings.praise
   local vol = App.settings.voiceVolume
   local title = c.name .. '  ' .. U.formatDelta(res.lossMs) .. ' s'
+  local drill = App.drill
+  if drill and drill.k == k and drill.phase ~= 'idle' and drill.phase ~= 'saving' then
+    drill:record(res.lossMs)
+    title = string.format(S.drill.try, drill.attempts) .. ':  ' .. title
+      .. '  (' .. string.format(S.drill.best, U.formatDelta(drill.best)) .. ')'
+  end
 
   if verdict and verdict.focus and App.settings.lessons then
     -- The corner being worked on: always say how this attempt went.
@@ -659,6 +671,13 @@ local function judgeCorner(k)
   end
 end
 
+local announceSettled
+
+-- In corner repeat the attempt ends at the corner exit: settle it there.
+function settleFocus(k, res)
+  announceSettled(k, App.lesson:settle(k, nil, res.lossMs, res.id ~= 'offTrack'))
+end
+
 -- Called when the car leaves the whole segment of corner k: quietly replace
 -- the time lost with the figure for the full segment, which includes what a
 -- slow exit cost down the following straight.
@@ -669,7 +688,12 @@ local function settleCorner(k)
   local sl = Metrics.slice(App.track, App.recorder.lap, App.recorder.prev, App.segs[k])
   if not sl then return end
   res.lossMs = sl.timeMs - ref.timeMs
-  local verdict = App.lesson:settle(k, sl.timeMs, res.lossMs, res.id ~= 'offTrack')
+  announceSettled(k, App.lesson:settle(k, sl.timeMs, res.lossMs, res.id ~= 'offTrack'))
+end
+
+-- Says so when the corner being worked on is sorted (or put aside), and
+-- names the next one.
+function announceSettled(k, verdict)
   if not (verdict and App.settings.lessons) then return end
   -- The corner being worked on is sorted (or put aside): say so, and name the next one.
   local corners = App.track.corners
@@ -691,6 +715,61 @@ local function settleCorner(k)
   if fixed and App.settings.voice and App.settings.praise then Voice.say('fixed', App.settings.voiceVolume, false, 2) end
 end
 
+-- Corner repeat ----------------------------------------------------------------
+
+-- Remembers the car on the way to the focus corner and puts it back there
+-- after every attempt, for as long as the driver keeps it switched on.
+function App.drillFrame(s, cell, dt, busy, driving)
+  local drill, settings = App.drill, App.settings
+  local button = App.repeatButton
+  if button then
+    local okDown, down = pcall(button.down, button)
+    down = okDown and down == true
+    if down and not App.repeatHeld then settings.repeatCorner = not settings.repeatCorner end
+    App.repeatHeld = down
+  end
+  local f = App.lesson.focus
+  local k = f and f.k or nil
+  local on = settings.repeatCorner == true and k ~= nil
+  if on and not Sim.canRepeat() then
+    settings.repeatCorner, on = false, false
+    showTip({ title = S.drill.unavailable, rank = 30 }, 6)
+  end
+  local di = drillIn
+  di.on, di.k, di.n, di.cell = on, k, App.track.n, cell
+  di.speedKmh, di.steady = s.speedKmh, driving and not busy
+  if on then
+    local seg, es = App.segs[k], App.coachPlan.exitSegs[k]
+    local n = App.track.n
+    di.saveCell = U.wrapIndex(seg.from - config.drill.saveBeforeCells, n)
+    di.endCell = U.wrapIndex(seg.from + (es and es.cells or seg.cells) + math.floor(config.drill.endMarginM / App.track.cellM), n)
+  end
+  local action = drill:update(di, dt)
+  if action == 'save' then
+    Sim.saveState(function(data)
+      drill:saved(data)
+      if data then
+        showTip({ title = string.format(S.drill.start, App.track.corners[k].name), body = S.drill.startBody,
+          good = true, rank = 30 }, 6)
+      end
+    end)
+  elseif action == 'load' then
+    -- With corner repeat the car never reaches the end of the corner's whole
+    -- stretch, so the attempt is settled here with what was measured at the exit.
+    local res = App.cornerResults[k]
+    if res and drill.last then settleFocus(k, res) end
+    App.drillJump = true
+    if Sim.loadState(drill.data) then
+      App.jumped = true
+    else
+      App.drillJump = false
+      settings.repeatCorner = false
+      drill:stop()
+      showTip({ title = S.drill.failed, rank = 30 }, 6)
+    end
+  end
+end
+
 -- One frame -----------------------------------------------------------------
 
 local function frame(dt)
@@ -702,7 +781,10 @@ local function frame(dt)
   if s.pos < 0 or s.pos >= 1 then s.pos = s.pos % 1 end
 
   if App.restarted or App.jumped then
-    App.recorder:restart(App.jumped and 'jump' or nil)
+    -- Being put back for another try at a corner is not a teleport to the
+    -- pits: the lap no longer counts, but the corner is still judged.
+    App.recorder:restart(App.jumped and (App.drillJump and 'drill' or 'jump') or nil)
+    App.drillJump = false
     if App.pilot then App.pilot:reset() end
     if App.live then App.live:reset() end
     App.liveCue = nil
@@ -863,6 +945,8 @@ local function frame(dt)
       if App.settings.voice then Voice.say(def.clip, vol, ev.urgent, 0.7) end
     end
   end
+
+  if ready and App.coachPlan then App.drillFrame(s, cell, dt, busy, driving) end
 
   -- Feedback against the benchmark (or your own best), given just past the
   -- exit of each corner.

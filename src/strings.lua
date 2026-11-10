@@ -173,6 +173,18 @@ return {
     why = 'The limit lap is an estimate: the best grip seen from this car so far, used in every corner. It is not a world record; a lap file from a faster driver raises it.',
   },
 
+  -- Corner repeat.
+  drill = {
+    try = 'Try %d',
+    best = 'best %s s',
+    start = 'Corner repeat: %s',
+    startBody = 'After each attempt you are put back before the corner. Switch it off in the panel, or with the button you bound there.',
+    unavailable = 'Corner repeat only works in an offline practice session with no other cars.',
+    failed = 'The game would not put the car back. Corner repeat is switched off.',
+    marker = 'Your brake marker for %s: %d m before the benchmark brakes.',
+    markerAt = 'Your brake marker for %s is at the benchmark brake point.',
+  },
+
   -- The spotter.
   spot = {
     carLeft = { text = 'CAR LEFT', clip = 'car_left' },

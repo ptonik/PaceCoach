@@ -42,6 +42,11 @@ are new to sim racing and do not know the tracks yet.
 - **Can be measured against someone quick.** If a fast lap for your car and
   track has been shared in this repository, the app downloads it and uses it
   as the benchmark and as part of the limit lap.
+- **Does what a coach in the passenger seat does without talking.** It
+  sends you back to try the same corner again without driving the lap, puts
+  a lead car on the track for you to follow, sets out cones and a brake
+  marker that moves as you improve, and shows the corner ahead on the HUD as
+  brake and throttle shapes to trace with your feet.
 - **Teaches racing, not only lapping.** A spotter calls cars alongside
   ("car left", "clear") and the coach keeps quiet while you are in traffic.
   A stint coach counts laps in a row close to your best. A licence ladder
@@ -61,7 +66,7 @@ repository by itself.
 what the app drew; the track view is a stand-in for the game.
 `tools/make_replay.sh` builds the page.*
 
-> **Status (0.8.0): early release.** The logic is covered by automated tests,
+> **Status (0.9.0): early release.** The logic is covered by automated tests,
 > and the whole app runs against a stand-in for the game. In that simulation
 > a learner who starts 3.7 s off the teacher beats it on lap 12 and is within
 > 0.3% of what the simulated car can really do after 45 laps. That shows the
@@ -208,6 +213,7 @@ Diagnostics**, and the last lines of
 | Corners are called too early or too late | Panel → Settings → "Call corners ... before braking". Lower is later. |
 | The coach talks too much | Panel → Settings: switch off "turn in", the line advice, praise, or all live coaching. The beginner HUD already limits it to two cues per corner. |
 | No teacher appears | The AI cars must be the same model as yours, and one of them has to finish a clean lap without visiting the pits. Panel → Teacher shows how many cars are being watched. |
+| Corner repeat does nothing | It needs a focus corner (drive a lap or two with a benchmark) and an offline practice session with no other cars. It starts the next time you approach that corner at speed. |
 | No line on the track | Panel → Teacher shows the line's status. If it reports an error, send it to me; the rest of the app is unaffected. Meanwhile the game's own "Ideal line" assist is a good substitute. |
 | "Update failed" in Settings | Nothing was changed. Try "Check for updates" again later, or run **Update PaceCoach from GitHub.bat**. |
 
@@ -287,6 +293,40 @@ deliberately cautious.
   added up. It is a lap you have already driven, only not in one go.
 - **Where the time goes**: every corner, biggest typical loss first.
 - **Sessions**: one line per session with this car and track.
+
+## In the passenger seat
+
+Four things a coach does that are not talking. All of them need a benchmark:
+a teacher lap, a shared lap, or (driving alone) your own limit lap.
+
+- **Corner repeat.** Ten tries at one corner in five minutes instead of ten
+  laps in twenty. Press **Repeat this corner** in Panel → Coach (or bind a
+  wheel button in Settings). As you next approach the focus corner the app
+  remembers the car's state; after every attempt it shows the time lost
+  ("Try 4: T3 +0.21 s, best +0.12 s") and puts you back before the corner at
+  the same speed. Stuck in the gravel, it puts you back too. When the corner
+  is sorted it moves to the next focus corner the next time you reach it.
+  Offline practice with no other cars only: the game does not allow it
+  elsewhere, and the app says so. Laps do not count while it is on.
+- **Lead car.** A pale car drawn on the track a little over a second ahead
+  of you, driving the benchmark's line. Its tail lights up red when the
+  benchmark is on the brakes. It is tied to where you are, so it never
+  drives away: follow it, brake when it brakes.
+- **Cones and your brake marker.** For the corners coming up: a white cone
+  on the outside where the benchmark turns in, a yellow one on the inside at
+  the apex, a green one on the outside at the exit. An **orange board on
+  both sides of the road with a stripe across it** is your own brake marker:
+  one step later than where you last braked for this corner, never later
+  than the benchmark, and back by 10 m after you miss the corner. The thin
+  red bar is where the benchmark brakes.
+- **Corner strip** on the HUD, from 120 m before the brake point to the
+  exit. The dim red and green shapes are the benchmark's brake and throttle
+  through the corner ahead; the white marks are your own feet as you go; the
+  white line is the car. B, T, A and X mark brake point, turn-in, apex and
+  exit. Top left is the speed to aim for at the apex, and after the apex how
+  far off it you were.
+
+Each has its own switch in Panel → Settings.
 
 ## Race school
 
@@ -437,6 +477,8 @@ Panel → Settings.
   2 to 6 seconds.
 - **Driving line on the track**, **Pedal bars on the advanced HUD**,
   **Speed bar against the benchmark**.
+- **Corner repeat** and the button for it, **Lead car**, **Cones and my
+  brake marker**, **Corner strip on the HUD**.
 - **I use a gamepad**: turns off the steering-smoothness check and the
   steering feedback after corners.
 - **Keep the last laps of each session**, **Download a shared fast lap**.

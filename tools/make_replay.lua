@@ -101,7 +101,8 @@ end
 
 local dict, dictN, dictList = {}, 0, {}
 local current = {}
-local function emit(call)
+local rowStart = {}                      -- positions in `current` where a HUD row begins
+local function emit(call, startsRow)
   local id = dict[call]
   if not id then
     id = dictN
@@ -110,12 +111,41 @@ local function emit(call)
     dictList[dictN] = call
   end
   current[#current + 1] = id
+  if startsRow then rowStart[#current] = true end
+end
+
+-- Most of a frame is the same as the frame before. Each row of the HUD is
+-- cut into short runs of calls, and a frame only lists which runs it uses.
+local groups, groupN, groupList = {}, 0, {}
+local RUN = 12
+local function packed()
+  local out, run = {}, {}
+  local function flush()
+    if #run == 0 then return end
+    local key = table.concat(run, ',')
+    local id = groups[key]
+    if not id then
+      id = groupN
+      groups[key] = id
+      groupN = groupN + 1
+      groupList[groupN] = '[' .. key .. ']'
+    end
+    out[#out + 1] = id
+    run = {}
+  end
+  for i, id in ipairs(current) do
+    if rowStart[i] or #run >= RUN then flush() end
+    run[#run + 1] = id
+  end
+  flush()
+  return table.concat(out, ',')
 end
 
 local path = {}
 local function hook()
   rawset(ui, 'drawRectFilled', function(a, b, c, rounding)
-    emit(string.format('["r",%s,%s,%s,%s,%d,%s]', num(a.x), num(a.y), num(b.x), num(b.y), color(c), num(rounding or 0)))
+    emit(string.format('["r",%s,%s,%s,%s,%d,%s]', num(a.x), num(a.y), num(b.x), num(b.y), color(c), num(rounding or 0)),
+      a.x == 0 and b.x >= 459)
   end)
   rawset(ui, 'drawLine', function(a, b, c, thickness)
     emit(string.format('["l",%s,%s,%s,%s,%d,%s]', num(a.x), num(a.y), num(b.x), num(b.y), color(c), num(thickness or 1)))
@@ -169,8 +199,8 @@ runOpts.onFrame = function(a, st, s, lapIndex)
       hooked = true
       hook()
     end
-    current = {}
-    st.window.x, st.window.y = 460, 310
+    current, rowStart = {}, {}
+    st.window.x, st.window.y = 460, 390
     teacher = teacher or a.teacherLap
     lapStart[lapIndex] = lapStart[lapIndex] or clock
   end
@@ -197,7 +227,7 @@ runOpts.afterDraw = function(a, st, s, lapIndex)
     frames[#frames + 1] = string.format('[%s,%d,%d,%s,%s,%.3f,%s,%s,%s,%.2f,%.2f,%s,%.2f,%.2f,%s,[%s]]',
       num(clock), lapIndex, U.round(s.t), num(x), num(z), math.atan2(dz, dx), num(gx), num(gz),
       num(s.v), s.gas, s.brake, num(g and g.vRef or s.v), g and g.refGas or 0, g and g.refBrake or 0,
-      a.benchDeltaMs and tostring(U.round(a.benchDeltaMs)) or 'null', table.concat(current, ','))
+      a.benchDeltaMs and tostring(U.round(a.benchDeltaMs)) or 'null', packed())
   end
 runOpts.onLap = function(a, _, lapNumber, lapMs)
     local f = a.lesson.focus
@@ -238,7 +268,7 @@ local out = {
   ',"refName":', str((app.teacherLap and 'Teacher') or 'Your best'),
   ',"teacherMs":', tostring(U.round(teacher.timeMs)),
   ',"carMs":', real and 'null' or tostring(U.round(Story.carLimitMs(world))),
-  ',"hud":[460,310]',
+  ',"hud":[460,390]',
   ',"palette":[', table.concat(paletteList, ','), ']',
   ',"track":[', table.concat(pts, ','), ']',
   ',"zone":', str(table.concat(zone)),
@@ -246,6 +276,7 @@ local out = {
   ',"laps":[', table.concat(lapRows, ','), ']',
   ',"says":[', table.concat(says, ','), ']',
   ',"calls":[', table.concat(dictList, ','), ']',
+  ',"runs":[', table.concat(groupList, ','), ']',
   ',"frames":[', table.concat(frames, ','), ']}',
 }
 local f = assert(realIo.open(target, 'w'))

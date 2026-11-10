@@ -228,6 +228,25 @@ local function coachTab(app, W)
         S.dirLower[c.dir], U.formatDelta(f.baseMs)), C.cyan)
       paragraph(app.remedyText(f.id, f.value) or '', W)
       for _, how in ipairs(S.howto[f.id] or {}) do paragraph('- ' .. how, W) end
+      local marker = lesson:brakeTargetM(f.k)
+      if marker then
+        ui.text(marker >= 1 and string.format(S.drill.marker, c.name, U.round(marker))
+          or string.format(S.drill.markerAt, c.name))
+      end
+      -- Corner repeat: go back and try this corner again, without the lap.
+      if Sim.has['ui.button'] then
+        local on = app.settings.repeatCorner == true
+        if ui.button(on and 'Stop repeating this corner' or 'Repeat this corner') then
+          app.settings.repeatCorner = not on
+        end
+        local drill = app.drill
+        if on and drill and drill.attempts > 0 then
+          ui.text(string.format(S.drill.try, drill.attempts)
+            .. (drill.best and ('   ' .. string.format(S.drill.best, U.formatDelta(drill.best))) or ''))
+        elseif not on and not Sim.canRepeat() then
+          line(S.drill.unavailable, C.dim)
+        end
+      end
       traceChart(app, f.k, W)
       ui.text(string.format('Attempts: %d   good in a row: %d of %d', f.tries, f.streak,
         config.lesson.masterStreak))
@@ -487,6 +506,14 @@ local function settingsTab(app, W)
     Voice.say(app.settings.brakeBeep and 'beep' or 'brake', app.settings.voiceVolume, true)
   end
   gap()
+  toggle(app, 'repeatCorner', 'Corner repeat: put me back before the focus corner after each attempt')
+  if app.repeatButton and Sim.has['vec2'] then
+    ui.text('Button to switch corner repeat on and off:')
+    pcall(app.repeatButton.control, app.repeatButton, vec2(220, 0))
+  end
+  toggle(app, 'ghostCar', 'Lead car to follow on the track')
+  toggle(app, 'cones', 'Cones and my brake marker on the track')
+  toggle(app, 'cornerStrip', 'Corner strip on the HUD (pedal shapes to follow)')
   toggle(app, 'line3d', 'Driving line on the track (needs a benchmark lap)')
   toggle(app, 'ghostPedals', 'Pedal bars on the advanced HUD')
   toggle(app, 'paceBar', 'Speed bar against the benchmark')
