@@ -59,10 +59,10 @@ end
 -- player's own lap exists: a beginner's own lap is not a good guide for where
 -- to brake, so the cautious track-shape estimate stays in charge until there
 -- is something better.
-function Teacher.choose(teacher, import, own)
+function Teacher.choose(teacher, import, own, importLabel)
   local lap, label
   if teacher then lap, label = teacher, 'teacher' end
-  if import and (not lap or import.timeMs < lap.timeMs) then lap, label = import, 'friend' end
+  if import and (not lap or import.timeMs < lap.timeMs) then lap, label = import, importLabel or 'friend' end
   if lap and own and own.timeMs < lap.timeMs then return own, 'you' end
   return lap, label
 end

@@ -2,7 +2,7 @@
 -- These are starting values; they are meant to be tuned after real laps.
 
 return {
-  version = '0.6.0',
+  version = '0.8.0',
 
   grid = {
     cellM = 2,          -- target cell length along the track
@@ -81,6 +81,7 @@ return {
     exitPadM = 40,
     pedalOff = 0.05,
     coastMinKmh = 40,
+    steerNoiseDeg = 6,       -- the wheel has to come back this far to count as a correction
   },
 
   -- Building the braking curve and targets from a benchmark lap.
@@ -106,6 +107,9 @@ return {
     coastM = 15,
     lineM = 2,
     exitSlowKmh = 5,
+    busyHandsExtra = 3,      -- this many more steering corrections than the benchmark
+    lockMinDeg = 20,         -- corners needing less steering than this are not judged on it
+    lockRatio = 1.3,         -- this much more steering than the benchmark, without being faster
     trailMinM = 5,           -- the benchmark keeps braking at least this far into the corner
     trailShortM = 12,        -- ...and you were off the brake this much sooner
     vagueMs = 200,           -- a small loss with no clear cause is not worth a note
@@ -195,6 +199,8 @@ return {
     throttlePerM = 2.5,
     exitPerKmh = 2.5,
     linePerM = 20,
+    handsPerExtra = 15,      -- points off per extra steering correction in a corner
+    tierWeight = 0.5,        -- how much a loss counts when its cause is ahead of the driver's stage
     consistencyPerS = 50,
     -- Training steps.
     cleanLaps = 3,
@@ -235,10 +241,42 @@ return {
     },
   },
 
+  -- The spotter: cars alongside, and traffic close ahead.
+  spotter = {
+    minKmh = 30,
+    overlapM = 4.6,          -- nose to tail overlap: closer than this along the car counts as alongside
+    minSideM = 1.2,          -- ...and between this
+    maxSideM = 4.5,          -- ...and this far to the side
+    onS = 0.15,              -- has to last this long before it is called
+    offS = 0.5,              -- gone for this long before "clear"
+    trafficAheadM = 25,      -- a car this close ahead: the coach keeps its opinions to itself
+    trafficSideM = 3,
+    maxCars = 40,
+  },
+
+  -- The stint coach: laps in a row close to your best.
+  stint = {
+    windowFrac = 0.012,      -- "in the window": within 1.2% of your best lap
+    milestones = { 3, 5, 10, 20 },
+  },
+
+  -- The licence ladder. pace = best lap as a share of the limit lap.
+  licence = {
+    grades = {
+      { id = 'none' },
+      { id = 'd', clean = 3 },
+      { id = 'c', clean = 5, steps = 3, pace = 1.06 },
+      { id = 'b', clean = 10, steps = 4, pace = 1.03, window = 5 },
+      { id = 'a', clean = 20, steps = 5, pace = 1.015, window = 10 },
+      { id = 'pro', clean = 20, steps = 5, pace = 1.005, window = 20 },
+    },
+  },
+
   -- Updates from GitHub.
   update = {
     base = 'https://raw.githubusercontent.com/ptonik/PaceCoach/main/',
     manifest = 'update.txt',
+    laps = 'laps/',          -- shared fast laps live here in the repository, one file per car and track
     page = 'https://github.com/ptonik/PaceCoach',
     checkAfterS = 5,         -- seconds after start-up before looking for a new version
     maxFiles = 200,
@@ -266,6 +304,7 @@ return {
     minLapMs = 20000,
     jumpFraction = 0.05,     -- moving further than this in one frame is a teleport
     officialToleranceMs = 1500,
+    logKeep = 6,             -- laps of the current session kept on disk for the replay
   },
 
   mistakes = {

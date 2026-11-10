@@ -11,6 +11,11 @@ Lesson.__index = Lesson
 -- Results that are not a cause one can give an instruction for.
 local NO_REMEDY = { ok = true, gain = true, slower = true }
 
+-- What a driver has to get right before anything else is worth working on.
+local FOUNDATION = { offTrack = true, brakeLate = true, brakeEarly = true, noBrake = true, wide = true }
+-- What only makes sense once the basics are steady.
+local ADVANCED = { noTrail = true, tooMuchLock = true }
+
 Lesson.STAGES = { 'clean', 'braking', 'speed', 'exits', 'consistency' }
 
 function Lesson.new(cornerCount, cfg)
@@ -83,13 +88,18 @@ function Lesson:choose()
     local resting = self.parked[k] and c.count < self.parked[k]
     if #c.passes > 0 and not resting then
       local score, id, value, exitMs = self:_score(k)
-      if id and score >= cfg.minFocusMs and (not best or score > best.baseMs) then
+      -- The coaching stage decides what comes first: a beginner's brake
+      -- points and line before corner speed, and nothing advanced at all.
+      local tier, weight = self.tier or 3, 1
+      if id and tier == 1 and ADVANCED[id] then id, value = 'overSlow', nil end
+      if id and ((tier == 1 and not FOUNDATION[id]) or (tier == 2 and ADVANCED[id])) then weight = cfg.tierWeight end
+      if id and score >= cfg.minFocusMs and (not best or score * weight > best.weighted) then
         best = { k = k, id = id, value = value, firstId = id, baseMs = score, baseExitMs = exitMs,
-          tries = 0, streak = 0 }
+          weighted = score * weight, tries = 0, streak = 0 }
       end
     end
   end
-  if not best then
+  if not best and (self.tier or 3) >= 2 then
     -- No big loss anywhere. Is there a corner that is driven differently
     -- every lap? Being repeatable comes before being faster.
     local worst
@@ -104,7 +114,7 @@ function Lesson:choose()
     end
     best = worst
   end
-  if not best and self.allowPush then
+  if not best and self.allowPush and (self.tier or 3) >= 3 then
     -- Nothing is being lost any more. The only way on is to go and find more
     -- grip, one corner at a time: the one not tried for longest, and among
     -- those the one that takes most time.
@@ -376,8 +386,8 @@ end
 -- pass through every corner. A score is nil until there is data for it.
 function Lesson:skills()
   local cfg = self.cfg
-  local sum = { brake = 0, speed = 0, throttle = 0, exit = 0, line = 0 }
-  local cnt = { brake = 0, speed = 0, throttle = 0, exit = 0, line = 0 }
+  local sum = { brake = 0, speed = 0, throttle = 0, exit = 0, line = 0, hands = 0 }
+  local cnt = { brake = 0, speed = 0, throttle = 0, exit = 0, line = 0, hands = 0 }
   local function add(name, value)
     sum[name], cnt[name] = sum[name] + value, cnt[name] + 1
   end
@@ -388,6 +398,7 @@ function Lesson:skills()
       if d.throttleDiffM then add('throttle', math.max(0, d.throttleDiffM)) end
       if d.exitDiffKmh then add('exit', math.max(0, d.exitDiffKmh)) end
       if d.wideM then add('line', math.abs(d.wideM)) end
+      if d.reversalDiff then add('hands', math.max(0, d.reversalDiff)) end
     end
   end
   local out = {}
@@ -398,6 +409,7 @@ function Lesson:skills()
     out.exits = score(100 - cfg.throttlePerM * late - cfg.exitPerKmh * sum.exit / cnt.exit)
   end
   if cnt.line > 0 then out.line = score(100 - cfg.linePerM * sum.line / cnt.line) end
+  if cnt.hands > 0 then out.hands = score(100 - cfg.handsPerExtra * sum.hands / cnt.hands) end
   local cons = self:consistency()
   if cons then out.consistency = score(100 - cfg.consistencyPerS * cons.stdMs / 1000) end
   return out
@@ -449,6 +461,17 @@ function Lesson:stages()
   return out
 end
 
+-- Which coaching stage a driver is at when there is no pace level to go by:
+-- 1 until they can string clean laps together, 3 once brake points, corner
+-- speed and exits are all in place, 2 in between.
+function Lesson:stageTier()
+  local done = {}
+  for _, st in ipairs(self:stages()) do done[st.id] = st.done end
+  if not done.clean then return 1 end
+  if done.braking and done.speed and done.exits then return 3 end
+  return 2
+end
+
 -- The first training step that is not done yet, or nil when all are.
 function Lesson:stage()
   for _, st in ipairs(self:stages()) do
@@ -462,7 +485,7 @@ function Lesson:summary()
   local skills = self:skills()
   return {
     laps = self.lapCount, valid = self.validCount, ideal = self:ideal(), fixed = #self.fixed,
-    braking = skills.braking, speed = skills.speed, exits = skills.exits, line = skills.line,
+    braking = skills.braking, speed = skills.speed, exits = skills.exits, line = skills.line, hands = skills.hands,
     consistency = skills.consistency,
   }
 end

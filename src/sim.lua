@@ -152,6 +152,7 @@ function Sim.readCar(out, dt)
   out.lastLapValid = nil
   if has['car.isLastLapValid'] then out.lastLapValid = car.isLastLapValid == true end
 
+  out.lookX, out.lookZ = nil, nil
   -- Angle between where the car points and where it is going (spin detection),
   -- and lateral g. Yaw rate x speed stands in when the game gives no g reading.
   out.velAngleDeg, out.latG = nil, nil
@@ -161,6 +162,7 @@ function Sim.readCar(out, dt)
     local lm = sqrt(lx * lx + lz * lz)
     if lm > 0.01 then
       lx, lz = lx / lm, lz / lm
+      out.lookX, out.lookZ = lx, lz
       if has['car.velocity'] then
         local vel = car.velocity
         local vx, vz = vel.x, vel.z
@@ -391,6 +393,28 @@ function Sim.readOther(index, out)
     or (has['car.isInPit'] and car.isInPit == true) or false
   out.isAI = has['car.isAIControlled'] and car.isAIControlled == true or false
   return out
+end
+
+-- Where every other car is, for the spotter. Fills `list` (reusing its
+-- tables) and returns how many entries are in use.
+function Sim.readTraffic(list, limit)
+  local count = 0
+  for i = 1, math.min(Sim.carCount() - 1, limit) do
+    local ok, car = pcall(ac.getCar, i)
+    if ok and car then
+      count = count + 1
+      local o = list[count]
+      if not o then
+        o = {}
+        list[count] = o
+      end
+      local p = car.position
+      o.x, o.z = p.x, p.z
+      o.inPit = (Sim.has['car.isInPitlane'] and car.isInPitlane == true)
+        or (Sim.has['car.isInPit'] and car.isInPit == true) or false
+    end
+  end
+  return count
 end
 
 -- Distance from the ideal line to the left and right track edges, in metres.

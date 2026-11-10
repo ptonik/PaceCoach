@@ -179,6 +179,34 @@ local function coachTab(app, W)
   else
     line('Coaching against ' .. (S.who[app.coachLabel] or 'the benchmark')
       .. '   ' .. U.formatLap(app.coachPlan.lap.timeMs), C.green)
+    local lic = app.licence
+    if lic then
+      line(string.format(S.licence.holds, S.licence[lic.id]), C.yellow)
+      if lic.next then
+        ui.text(string.format(S.licence.forNext, S.licence[lic.next.id]))
+        for _, r in ipairs(lic.next.reqs) do
+          local text
+          if r.key == 'pace' then
+            text = string.format(S.licence.pace, (r.need - 1) * 100, r.have and string.format('%.1f%%', (r.have - 1) * 100) or 'not measured')
+          else
+            text = string.format(S.licence[r.key], math.min(r.have, r.need), r.need)
+          end
+          line((r.done and '  [x] ' or '  [ ] ') .. text, r.done and C.green or C.white)
+        end
+      else
+        ui.text(S.licence.top)
+      end
+      if app.stint then
+        ui.text(string.format(S.stint.line, app.stint.streak, app.stint.bestStreak, app.stint.clean, app.stint.bestClean))
+      end
+      line(S.licence.why, C.dim)
+      gap()
+    end
+    local tier = S.tier[app.tier or 1]
+    if tier then
+      ui.text(string.format(S.tier.title, app.tier or 1, tier.name))
+      line(tier.line, C.dim)
+    end
     local level = app.level
     if level and app.limitLap then
       line(string.format(S.level.line, S.level[level.id], level.ratio * 100, U.formatLap(app.limitLap.timeMs)), C.cyan)
@@ -446,6 +474,7 @@ local function settingsTab(app, W)
   toggle(app, 'brakeSound', 'Sound at the brake cue')
   toggle(app, 'brakeBeep', 'Use a beep instead of the word "brake"')
   toggle(app, 'throttleSound', 'Say "throttle" when I am late back on the power')
+  toggle(app, 'spotter', 'Spotter: call cars alongside ("car left", "clear")')
   toggle(app, 'liveCoach', 'Live coaching while I drive (brake harder, ease off, wait...)')
   toggle(app, 'turnCue', 'Say "turn in" at the turn-in point')
   toggle(app, 'lineCue', 'Say "move left / right" when I am off the line before a corner')
@@ -466,7 +495,10 @@ local function settingsTab(app, W)
   toggle(app, 'mph', 'Speeds in mph')
   toggle(app, 'swapLR', 'Swap left and right (only if callouts are mirrored)')
   gap()
+  toggle(app, 'sessionLog', 'Keep the last laps of each session for the replay')
+  gap()
   line('Updates', C.dim)
+  toggle(app, 'sharedLaps', 'Download a shared fast lap for this car and track, if there is one')
   toggle(app, 'autoCheck', 'Look for a new version when the app starts')
   toggle(app, 'autoInstall', 'Download and install new versions without asking')
   local u = app.updater

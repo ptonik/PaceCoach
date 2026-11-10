@@ -214,7 +214,7 @@ test('a track with no ideal line says so and keeps recording laps', function()
   eq(app.state, 'noline')
   check(sawText(state, 'no ideal line'), 'HUD explains')
   check(app.best, 'laps still recorded')
-  eq(#state.plays, 1, 'only the best-lap call')
+  eq(table.concat(clips(state), ' '):sub(1, 17), 'best_lap streak_3', 'no corner calls: the best lap, then three clean laps in a row')
 end)
 
 test('a line that is not really there is rejected', function()
@@ -644,10 +644,14 @@ test('past the teacher: the learner keeps finding time against the limit lap', f
   check(app.best.timeMs >= carMs - 1, 'and not faster than the car can go')
   check(laps[1] > carMs * 1.09, 'having started more than 9% off')
   eq(app.level.id, 'limit')
+  check(app.licence.index >= 5, 'pace plus forty-odd clean laps in the window: an endurance licence, got ' .. app.licence.id)
+  check(app.stint.bestStreak >= 20, 'a full stint in the window: ' .. app.stint.bestStreak)
+  check(sawText(state, 'Licence: '), 'licences are announced')
   check(sawText(state, 'Level up: '), 'level-ups are announced')
   check(sawText(state, 'Find the limit here'), 'the push instruction was shown')
   local joined = table.concat(clips(state), ' ')
   check(joined:find('level_up', 1, true) and joined:find('tip_push', 1, true), 'and spoken')
+  check(joined:find('streak_10', 1, true) and joined:find('licence_up', 1, true), 'stint marks and licences too')
   print(string.format('        lap 1 %.2f s, teacher %.2f s, lap 45 %.2f s, the car itself %.2f s',
     laps[1] / 1000, teacherMs / 1000, app.best.timeMs / 1000, carMs / 1000))
 end)
@@ -723,6 +727,158 @@ test('live coaching can be switched off, piece by piece', function()
   check(app.gauge and app.gauge.active, 'the speed bar keeps working')
 end)
 
+test('a session can be replayed from the files the app writes, in either handedness', function()
+  local Real = dofile(root .. '/tools/real_laps.lua')
+  for _, mirror in ipairs({ false, true }) do
+    local files = Story.storeWithTeacher(world)
+    if mirror then
+      -- In a mirrored game the saved teacher lap is in mirrored coordinates too.
+      local saved = Reference.decode(files[COMBO .. '.txt'])
+      for i = 1, saved.n do saved.laps.teacher.x[i] = -saved.laps.teacher.x[i] end
+      saved.track, saved.car = 'ks_synthetic-rect', 'test_car'
+      files[COMBO .. '.txt'] = Reference.encode(saved)
+    end
+    local app, state, laps = Story.run({ world = world, store = files, laps = 4, fake = { mirror = mirror } })
+    noErrors(app, state)
+    eq(app.track.leftSign, mirror and -1 or 1)
+    local sessionText = files[COMBO .. '.session.txt']
+    check(sessionText, 'the session log is written')
+    local logged = Reference.decode(sessionText)
+    eq(logged.left, mirror and -1 or 1, 'the log remembers which way left is')
+    local count = 0
+    for _ in pairs(logged.laps) do count = count + 1 end
+    eq(count, 4)
+
+    local real = assert(Real.load(sessionText, files[COMBO .. '.txt']))
+    eq(#real.laps, 4)
+    near(real.teacherMs, app.teacherLap.timeMs, 1)
+    local again, state2, laps2 = Story.run({ world = real.world, store = real.store, samples = real.samples, fake = real.fake })
+    noErrors(again, state2)
+    eq(#laps2, 4, 'every lap is seen again')
+    for i = 1, 4 do near(laps2[i], laps[i], 80, 'lap ' .. i .. ' time') end
+    eq(again.benchLabel, 'teacher')
+    eq(#again.track.corners, 7, 'the track is rebuilt from the teacher lap')
+    eq(again.track.corners[1].dir, 'right', 'left and right survive the round trip')
+    eq(again.track.corners[3].dir, 'left')
+    check(again.cornerResults[2] and again.cornerResults[2].id == app.cornerResults[2].id,
+      'the coach says the same about turn 2: ' .. tostring(again.cornerResults[2] and again.cornerResults[2].id))
+    check(sawText(state2, 'EASE OFF'), 'live cues fire on the replayed laps')
+  end
+  eq(Real.load('nonsense'), nil)
+end)
+
+test('the session log keeps only the newest laps, and can be switched off', function()
+  local files = Story.storeWithTeacher(world)
+  local app = Story.run({ world = world, store = files, laps = 8, windows = false })
+  local logged = Reference.decode(files[COMBO .. '.session.txt'])
+  local names = {}
+  for name in pairs(logged.laps) do names[#names + 1] = name end
+  table.sort(names)
+  eq(#names, config.lap.logKeep)
+  eq(names[#names], 'lap008')
+  local quiet = {}
+  local app2, state2 = session({ store = quiet })
+  app2.settings.sessionLog = false
+  run(app2, state2, drive({ laps = 1.3 }), function() app2.settings.sessionLog = false end)
+  eq(quiet[COMBO .. '.session.txt'], nil)
+end)
+
+print('racing')
+test('the spotter calls a car alongside, and the coach stays out of a fight', function()
+  local app, state = session({ store = Story.storeWithTeacher(world), others = { { model = 'another_car' } } })
+  local c2 = world.corners[2]
+  local lap = driveAs(SLOW, { laps = 2.2 })
+  local sawEdge, quietInTraffic = false, true
+  local livePlays = {}
+  for _, def in pairs(S.live) do livePlays[def.clip] = true end
+  for i, s in ipairs(lap) do
+    state.frame = i
+    Fake.drive(s)
+    local m = s.pos * world.lengthM
+    -- On the second lap another car sits alongside on the left from before
+    -- turn 2 until after it; otherwise it is half a lap away.
+    local beside = s.lapCount == 1 and m > c2.startM - 250 and m < c2.endM + 30
+    if beside then
+      Fake.driveOther(1, s, { offLeftM = 2.6 })
+    else
+      local far = {}
+      for k, v in pairs(s) do far[k] = v end
+      far.pos = (s.pos + 0.5) % 1
+      Fake.driveOther(1, far)
+    end
+    local before = #state.plays
+    script.update(s.dt)
+    script.windowMain(s.dt)
+    if app.lastError then error(app.lastError) end
+    if beside and app.spot and app.spot.left then
+      sawEdge = true
+      for j = before + 1, #state.plays do
+        if livePlays[state.plays[j].clip] then quietInTraffic = false end
+      end
+    end
+  end
+  noErrors(app, state)
+  local joined = table.concat(clips(state), ' ')
+  check(joined:find('car_left', 1, true), 'called: ' .. joined:sub(1, 300))
+  check(not joined:find('car_right', 1, true), 'on the correct side')
+  check(joined:find('clear', 1, true), 'and cleared')
+  check(sawEdge, 'the spotter state reached the HUD')
+  check(quietInTraffic, 'no live coaching while a car is alongside')
+  check(app.cornerResults[2] and app.cornerResults[2].traffic, 'turn 2 in traffic is not held against the driver')
+  eq(app.lesson.corners[2].count, 1, 'only the clear pass through turn 2 counts for the lesson plan')
+end)
+
+test('the spotter gets left and right the right way round in a mirrored game too', function()
+  local app, state = session({ mirror = true, others = { { model = 'another_car' } } })
+  for i, s in ipairs(drive({ laps = 0.3 })) do
+    state.frame = i
+    Fake.drive(s)
+    Fake.driveOther(1, s, { offLeftM = (i > 300 and i < 500) and -2.6 or 60 })
+    script.update(s.dt)
+  end
+  noErrors(app, state)
+  local joined = table.concat(clips(state), ' ')
+  check(joined:find('car_right', 1, true) and not joined:find('car_left', 1, true), joined)
+end)
+
+print('shared laps')
+test('a fast lap shared through the repository becomes the benchmark and raises the limit', function()
+  -- Someone quick has shared their lap file for this car and track.
+  local rec, fast = Recorder.new(world.n, config.lap), nil
+  for _, s in ipairs((driveAs({ latG = 1.45, brakeG = 1.35, accelG = 0.45, vmaxMs = 70 }, { laps = 2.2 }))) do
+    local done = rec:feed(s)
+    if done and done.valid then fast = done break end
+  end
+  local url = config.update.base .. config.update.laps .. 'ks_synthetic-rect__test_car.txt'
+  local files = Story.storeWithTeacher(world)
+  local app, state = session({ store = files, web = { [url] = Reference.encode({
+    track = 'ks_synthetic-rect', car = 'test_car', n = world.n, laps = { best = fast } }) } })
+  local before
+  run(app, state, driveAs(SLOW, { laps = 1.3 }), function()
+    if app.limitLap and not app.sharedLap then before = app.limitLap.timeMs end
+  end)
+  noErrors(app, state)
+  check(app.sharedLap, 'the shared lap arrived')
+  eq(app.benchLabel, 'shared')
+  near(app.benchmark.timeMs, fast.timeMs, 1)
+  check(sawText(state, 'Shared lap downloaded'), 'a note says so')
+  check(files[COMBO .. '.shared.txt'], 'and it is kept for next time')
+  check(app.limitLap.timeMs < app.teacherLap.timeMs - 500, 'the limit lap now reflects grip the teacher never showed')
+
+  -- Offline next time: it is still there.
+  local later, state3 = session({ store = files })
+  state3.offline = true
+  run(later, state3, driveAs(SLOW, { laps = 0.3 }))
+  eq(later.benchLabel, 'shared')
+
+  -- A file for another track layout is ignored.
+  local wrong, state4 = session({ web = { [url] = Reference.encode({
+    track = 'x', car = 'y', n = world.n + 7, laps = {} }) } })
+  run(wrong, state4, driveAs(SLOW, { laps = 0.3 }))
+  noErrors(wrong, state4)
+  eq(wrong.sharedLap, nil)
+end)
+
 print('updates')
 local function site(version)
   local base = config.update.base
@@ -734,6 +890,13 @@ local function site(version)
   local web = { [base .. config.update.manifest] = Updater.encode(version, 'test', files) }
   for _, f in ipairs(files) do web[base .. f.path] = f.data end
   return web
+end
+local function fetched(state)                  -- requests other than the shared-lap lookup
+  local count = 0
+  for _, url in ipairs(state.requests) do
+    if not url:find('/laps/', 1, true) then count = count + 1 end
+  end
+  return count
 end
 local function idle(app, state, seconds, extra)
   local s = threeLaps[1]
@@ -756,7 +919,7 @@ test('a newer version on GitHub is fetched and installed by itself', function()
   eq(state.store[root .. '/PaceCoach.lua'], '-- entry 9.9.9')
   eq(state.store[root .. '/src/config.lua'], '-- config 9.9.9')
   eq(#state.store[root .. '/sounds/new_clip.wav'], 900)
-  eq(#state.requests, 4, 'the list and three files')
+  eq(fetched(state), 4, 'the list and three files')
   check(sawText(state, 'PaceCoach 9.9.9 installed'), 'and says so')
   noErrors(app, state)
 end)
@@ -795,7 +958,7 @@ test('nothing new, no connection, or no download support: all quiet', function()
   local app, state = session({ web = site(config.version) })
   idle(app, state, 7)
   eq(app.updater.state, 'current')
-  eq(#state.requests, 1)
+  eq(fetched(state), 1)
   noErrors(app, state)
 
   app, state = session({ web = site('9.9.9') })
@@ -807,7 +970,7 @@ test('nothing new, no connection, or no download support: all quiet', function()
 
   app, state = session({ web = site('9.9.9') })
   idle(app, state, 1)
-  app.settings.autoCheck = false
+  app.settings.autoCheck, app.settings.sharedLaps = false, false
   idle(app, state, 7)
   eq(#state.requests, 0, 'switched off means no request at all')
 

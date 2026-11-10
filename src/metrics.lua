@@ -171,6 +171,23 @@ function Metrics.measure(sl, track, c, seg, cfg)
     end
   end
 
+  -- Steering: how much lock was used, and how often the wheel changed
+  -- direction. A clean corner is one turn in and one unwind.
+  local peak, reversals, dir = 0, 0, 0
+  local ext = sl.steer[sJ] or 0
+  for j = sJ, eJ do
+    local a = sl.steer[j] or 0
+    if math.abs(a) > peak then peak = math.abs(a) end
+    if dir == 0 then
+      if math.abs(a - ext) >= cfg.steerNoiseDeg then dir, ext = (a > ext) and 1 or -1, a end
+    elseif (a - ext) * dir > 0 then
+      ext = a
+    elseif (ext - a) * dir >= cfg.steerNoiseDeg then
+      reversals, dir, ext = reversals + 1, -dir, a
+    end
+  end
+  m.peakSteer, m.steerReversals = peak, reversals
+
   m.entryKmh = sl.v[m.brakeStartJ or sJ]
   m.exitKmh = sl.v[math.min(L, eJ + math.floor(cfg.exitPadM / cellM))]
   return m

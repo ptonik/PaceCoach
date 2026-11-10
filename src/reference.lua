@@ -38,6 +38,7 @@ function Reference.encode(data)
   out[#out + 1] = 'track=' .. tostring(data.track)
   out[#out + 1] = 'car=' .. tostring(data.car)
   out[#out + 1] = 'n=' .. tostring(data.n)
+  if data.left then out[#out + 1] = 'left=' .. tostring(data.left) end
   if data.grip then
     local lat = {}
     for i, v in ipairs(data.grip.lat or {}) do lat[i] = string.format('%.3f', v) end
@@ -48,17 +49,24 @@ function Reference.encode(data)
   for name in pairs(data.laps or {}) do names[#names + 1] = name end
   table.sort(names)
   for _, name in ipairs(names) do
-    local lap = data.laps[name]
-    out[#out + 1] = '[lap ' .. name .. ']'
-    out[#out + 1] = 'timeMs=' .. string.format('%d', U.round(lap.timeMs or 0))
-    out[#out + 1] = 'source=' .. tostring(lap.source or 'player')
-    for _, ch in ipairs(ORDER) do
-      local scale, src, vals = SCALE[ch], lap[ch], {}
-      for i = 1, lap.n do vals[i] = string.format('%d', U.round((src[i] or 0) * scale)) end
-      out[#out + 1] = ch .. '=' .. table.concat(vals, ',')
-    end
+    out[#out + 1] = Reference.encodeLap(name, data.laps[name])
   end
+  for _, chunk in ipairs(data.chunks or {}) do out[#out + 1] = chunk end   -- laps encoded earlier
   return table.concat(out, '\n') .. '\n'
+end
+
+-- One lap as text, without a trailing newline.
+function Reference.encodeLap(name, lap)
+  local out = { '[lap ' .. name .. ']' }
+  out[#out + 1] = 'timeMs=' .. string.format('%d', U.round(lap.timeMs or 0))
+  out[#out + 1] = 'source=' .. tostring(lap.source or 'player')
+  if lap.valid == false then out[#out + 1] = 'valid=0' end
+  for _, ch in ipairs(ORDER) do
+    local scale, src, vals = SCALE[ch], lap[ch], {}
+    for i = 1, lap.n do vals[i] = string.format('%d', U.round((src[i] or 0) * scale)) end
+    out[#out + 1] = ch .. '=' .. table.concat(vals, ',')
+  end
+  return table.concat(out, '\n')
 end
 
 local function numbers(text, scale)
@@ -90,6 +98,8 @@ function Reference.decode(text)
           lap.timeMs = tonumber(value)
         elseif key == 'source' then
           lap.source = value
+        elseif key == 'valid' then
+          lap.wasValid = value ~= '0'
         elseif SCALE[key] then
           lap[key] = numbers(value, SCALE[key])
         end
@@ -99,6 +109,8 @@ function Reference.decode(text)
         data.car = value
       elseif key == 'n' then
         data.n = tonumber(value)
+      elseif key == 'left' then
+        data.left = tonumber(value)
       elseif key == 'grip.lat' then
         data.grip = data.grip or {}
         data.grip.lat = numbers(value, 1) or {}
@@ -116,7 +128,7 @@ function Reference.decode(text)
       if type(l[ch]) ~= 'table' or #l[ch] ~= data.n then ok = false end
     end
     if ok then
-      l.n, l.valid, l.complete = data.n, true, true
+      l.n, l.valid, l.complete = data.n, l.wasValid ~= false, true
     else
       data.laps[name] = nil
     end
@@ -147,17 +159,46 @@ function Reference:importPath(trackId, carId)
   return self.dir .. '/' .. U.safeName(trackId) .. '__' .. U.safeName(carId) .. '.teacher.txt'
 end
 
-function Reference:loadImport(trackId, carId, n)
-  local text = self.load(self:importPath(trackId, carId))
-  if not text then return nil end
+-- The fastest lap in a lap file's text, if it fits this track grid.
+function Reference.fastest(text, n, source)
   local data = Reference.decode(text)
   if not data or data.n ~= n then return nil end
   local lap, fastest = nil, math.huge
   for _, l in pairs(data.laps) do
-    if l.timeMs and l.timeMs < fastest then lap, fastest = l, l.timeMs end
+    if l.valid ~= false and l.timeMs and l.timeMs > 0 and l.timeMs < fastest then lap, fastest = l, l.timeMs end
   end
-  if lap then lap.source = 'friend' end
+  if lap then lap.source = source end
   return lap
+end
+
+function Reference:loadImport(trackId, carId, n)
+  local text = self.load(self:importPath(trackId, carId))
+  if not text then return nil end
+  return Reference.fastest(text, n, 'friend')
+end
+
+-- A fast lap for this car and track that the app downloaded from the
+-- repository's shared laps, kept so it is there offline too.
+function Reference:sharedPath(trackId, carId)
+  return self.dir .. '/' .. U.safeName(trackId) .. '__' .. U.safeName(carId) .. '.shared.txt'
+end
+
+function Reference:loadShared(trackId, carId, n)
+  local text = self.load(self:sharedPath(trackId, carId))
+  if not text then return nil end
+  return Reference.fastest(text, n, 'shared')
+end
+
+-- The last few laps of the current session, for replaying them afterwards.
+function Reference:sessionPath(trackId, carId)
+  return self.dir .. '/' .. U.safeName(trackId) .. '__' .. U.safeName(carId) .. '.session.txt'
+end
+
+-- header: { track =, car =, n =, left = }, chunks: laps already encoded with encodeLap.
+function Reference:saveSession(header, chunks)
+  local text = Reference.encode({ track = header.track, car = header.car, n = header.n, left = header.left,
+    laps = {}, chunks = chunks })
+  return self.save(self:sessionPath(header.track, header.car), text) and true or false
 end
 
 -- Progress history: one line of numbers per session for a car + track pair.
@@ -169,7 +210,7 @@ end
 
 local HISTORY_KEYS = {
   'at', 'best', 'bench', 'laps', 'valid', 'ideal', 'fixed',
-  'braking', 'speed', 'exits', 'line', 'consistency', 'pace',
+  'braking', 'speed', 'exits', 'line', 'hands', 'consistency', 'pace', 'window', 'clean', 'steps',
 }
 
 function Reference.encodeHistory(list)

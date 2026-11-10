@@ -33,6 +33,20 @@ are new to sim racing and do not know the tracks yet.
   car's grip, as seen so far, allows. When no time is being lost any more it
   sends you looking for more grip, one corner at a time, and the limit moves
   up when you find it.
+- **Coaches to your stage.** A beginner hears about staying on the track,
+  brake points and the line, one cue per corner. Corner speed, throttle
+  timing, smooth hands and consistency come next; trail braking and hunting
+  for grip only once those are in place.
+- **Watches your hands** (with a wheel): too many steering corrections in a
+  corner, or more lock than the corner needs, are named as causes.
+- **Can be measured against someone quick.** If a fast lap for your car and
+  track has been shared in this repository, the app downloads it and uses it
+  as the benchmark and as part of the limit lap.
+- **Teaches racing, not only lapping.** A spotter calls cars alongside
+  ("car left", "clear") and the coach keeps quiet while you are in traffic.
+  A stint coach counts laps in a row close to your best. A licence ladder
+  from "track ready" to "endurance ready" asks for pace and for repeating it
+  without a mistake.
 - **Keeps score of your progress**: a pace level from Rookie to On the limit,
   skill scores for braking points, corner speed, exits, line and consistency,
   five training steps to tick off, your ideal lap, and a line per session so
@@ -47,7 +61,7 @@ repository by itself.
 what the app drew; the track view is a stand-in for the game.
 `tools/make_replay.sh` builds the page.*
 
-> **Status (0.6.0): early release.** The logic is covered by automated tests,
+> **Status (0.8.0): early release.** The logic is covered by automated tests,
 > and the whole app runs against a stand-in for the game. In that simulation
 > a learner who starts 3.7 s off the teacher beats it on lap 12 and is within
 > 0.3% of what the simulated car can really do after 45 laps. That shows the
@@ -274,6 +288,68 @@ deliberately cautious.
 - **Where the time goes**: every corner, biggest typical loss first.
 - **Sessions**: one line per session with this car and track.
 
+## Race school
+
+One fast lap gets you a grid slot. A race, and above all a long one, is won
+by doing nearly that lap again and again, in traffic, without a mistake.
+
+- **Spotter.** With other cars on track it says "car left" or "car right"
+  when one is alongside, "three wide" when there is one on each side, and
+  "clear" when they have gone. The HUD card gets a red edge on that side.
+- **No coaching in a fight.** While a car is alongside or within 25 m ahead,
+  the live coach says nothing, and a corner taken in traffic is left out of
+  the lesson plan: it says nothing about how you drive it alone.
+- **Stint coach.** A lap within 1.2% of your best, with no more than two
+  wheels off, is "in the window". The end-of-lap note counts them in a row,
+  and 3, 5, 10 and 20 in a row are marked. Going to the pits ends the stint.
+- **Licence** (Panel → Coach), for this car on this track:
+
+  | Licence | Clean laps in a row | Training steps | Best lap within | In the window in a row |
+  |---|---|---|---|---|
+  | D: track ready | 3 | | | |
+  | C: club racer | 5 | 3 of 5 | 6% of the limit lap | |
+  | B: racer | 10 | 4 of 5 | 3% | 5 |
+  | A: endurance ready | 20 | 5 of 5 | 1.5% | 10 |
+  | Pro | 20 | 5 of 5 | 0.5% | 20 |
+
+  The panel lists what you still need for the next one. Pace needs someone
+  to be measured against, so without a teacher or a shared lap the ladder
+  stops at D.
+
+What a licence here means: you can drive this car on this track quickly and
+keep doing it. What it does not mean: that you are ready for a real endurance
+race. Night, rain, tyre wear, fuel, pit stops and racing against people who
+fight back are not covered, and no app replaces the hours.
+
+## Coaching stages
+
+Panel → Coach shows which of three stages you are at. It comes from your pace
+level when there is one, otherwise from the training steps.
+
+1. **Foundations** (Rookie, Novice): losses from running off, braking at the
+   wrong place and missing the line are picked first, even when a slow apex
+   costs more on paper. One live cue per corner, plus "turn in".
+2. **Technique** (Club racer, Front runner): everything about corner speed,
+   throttle and steering counts fully, and "same brake point every lap"
+   lessons begin. Two live cues per corner.
+3. **The limit** (Expert and up): trail braking and "find the limit".
+
+## Replaying a session
+
+With "Keep the last laps of each session" on (the default), the app also
+writes the last six laps to `<track>__<car>.session.txt` next to the report.
+On a computer with LuaJIT, ffmpeg and Python:
+
+```
+tools/make_replay.sh my-session.html --session <file.session.txt> --combo <track__car.txt>
+```
+
+builds a page that plays those laps back from above, with the HUD and the
+voice as the app produces them for those laps. It is the current version of
+the app run over your laps again, so it shows what it says now, which can
+differ from what you heard in the car. Lock-ups, slides and track limits are
+not in the file.
+
 ## The session report
 
 After every lap the app writes the session up as plain text in
@@ -309,9 +385,15 @@ and builds one instead.
   (1.5%), On the limit (0.5%).
 
 What this is not: a world record. The limit lap only knows the grip somebody
-has actually shown in this car. To be measured against a truly fast driver,
-drop their lap file in (see "A lap from a faster friend"); the limit is then
-built from their grip too.
+has actually shown in this car. To be measured against a truly fast driver
+you need one of their laps, and there are two ways to get it:
+
+- **A shared lap.** A few seconds after start the app asks this repository
+  for `laps/<track>__<car>.txt`. If someone has put a lap file there it is
+  downloaded, kept for offline use, and used whenever it is the fastest lap
+  the app has. [laps/README.md](laps/README.md) says how to share yours.
+  Most cars and tracks have none yet.
+- **A friend's file**, as described under "A lap from a faster friend".
 
 ## How to practise with it
 
@@ -355,7 +437,10 @@ Panel → Settings.
   2 to 6 seconds.
 - **Driving line on the track**, **Pedal bars on the advanced HUD**,
   **Speed bar against the benchmark**.
-- **I use a gamepad**: turns off the steering-smoothness check.
+- **I use a gamepad**: turns off the steering-smoothness check and the
+  steering feedback after corners.
+- **Keep the last laps of each session**, **Download a shared fast lap**.
+- **Spotter**: calls for cars alongside.
 - **Speeds in mph**.
 - **Swap left and right**: only if callouts are mirrored.
 - **Updates**: see above.

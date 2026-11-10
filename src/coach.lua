@@ -13,7 +13,8 @@ local Coach = {}
 -- cfg = config.coach
 -- Returns { lossMs =, id =, value =, good = bool }.
 -- ids: gain, ok, offTrack, brakeLate, brakeEarly, noBrake, noTrail, overSlow,
---      gasLift, throttleLate, coast, wide, exitSlow, slower
+--      gasLift, throttleLate, coast, busyHands, tooMuchLock, wide, exitSlow, slower
+-- extra.gamepad = true leaves the steering out of it (a stick is not a wheel).
 function Coach.judge(ref, got, extra, cfg)
   extra = extra or {}
   local loss = got.timeMs - ref.timeMs
@@ -55,6 +56,13 @@ function Coach.judge(ref, got, extra, cfg)
     res.id, res.value = 'throttleLate', got.throttleRelM - ref.throttleRelM
   elseif got.coastM - ref.coastM >= cfg.coastM then
     res.id, res.value = 'coast', got.coastM - ref.coastM
+  elseif not extra.gamepad and got.steerReversals and ref.steerReversals
+      and got.steerReversals - ref.steerReversals >= cfg.busyHandsExtra then
+    res.id, res.value = 'busyHands', got.steerReversals - ref.steerReversals
+  elseif not extra.gamepad and got.peakSteer and ref.peakSteer and ref.peakSteer >= cfg.lockMinDeg
+      and got.peakSteer >= ref.peakSteer * cfg.lockRatio and minDiff <= 0 then
+    -- More steering than the corner needs, and no faster for it: the front is scrubbing.
+    res.id, res.value = 'tooMuchLock', (got.peakSteer / ref.peakSteer - 1) * 100
   elseif extra.wideM and extra.wideM >= cfg.lineM then
     res.id, res.value = 'wide', extra.wideM
   elseif ref.exitKmh - got.exitKmh >= cfg.exitSlowKmh then
@@ -83,6 +91,9 @@ function Coach.detail(ref, got, extra)
   }
   if ref.brakeRelM and got.brakeRelM then d.brakeDiffM = ref.brakeRelM - got.brakeRelM end
   if ref.throttleRelM and got.throttleRelM then d.throttleDiffM = got.throttleRelM - ref.throttleRelM end
+  if not extra.gamepad and ref.steerReversals and got.steerReversals then
+    d.reversalDiff = got.steerReversals - ref.steerReversals       -- positive: more corrections
+  end
   return d
 end
 

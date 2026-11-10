@@ -1693,6 +1693,140 @@ test('the session report reads like a debrief', function()
   check(empty:find('Benchmark: none yet', 1, true) and empty:find('Self-test: everything', 1, true), empty)
 end)
 
+test('steering corrections and too much lock are noticed, but not on a gamepad', function()
+  local ref = { timeMs = 5000, brakeRelM = -60, minKmh = 80, exitKmh = 120, lifts = 0, coastM = 0, steerReversals = 1, peakSteer = 60 }
+  local got = { timeMs = 5300, brakeRelM = -60, minKmh = 79, exitKmh = 119, lifts = 0, coastM = 0, peakBrake = 0.9, steerReversals = 5, peakSteer = 62 }
+  local r = Coach.judge(ref, got, {}, config.coach)
+  eq(r.id, 'busyHands')
+  eq(r.value, 4)
+  eq(Coach.detail(ref, got, {}).reversalDiff, 4)
+  check(Coach.judge(ref, got, { gamepad = true }, config.coach).id ~= 'busyHands', 'a stick is not judged like a wheel')
+  eq(Coach.detail(ref, got, { gamepad = true }).reversalDiff, nil)
+  got.steerReversals, got.peakSteer = 1, 85
+  r = Coach.judge(ref, got, {}, config.coach)
+  eq(r.id, 'tooMuchLock')
+  near(r.value, 41.7, 0.1, 'per cent more steering')
+  -- Measured from laps: the teacher turns in once and unwinds once.
+  local c2 = track.corners[2]
+  local clean = Metrics.measure(Metrics.slice(track, teacherLap, nil, segs[2]), track, c2, segs[2], config.metrics)
+  eq(clean.steerReversals, 1)
+  check(clean.peakSteer > config.coach.lockMinDeg, 'fixture: a corner with real steering in it')
+  local saw = copyLap(teacherLap)
+  for j = 0, U.forward(c2.startCell, c2.endCell, track.n) do
+    local i = U.wrapIndex(c2.startCell + j, track.n)
+    saw.steer[i] = saw.steer[i] + 14 * math.sin(j * 0.7)
+  end
+  local busy = Metrics.measure(Metrics.slice(track, saw, nil, segs[2]), track, c2, segs[2], config.metrics)
+  check(busy.steerReversals >= 5, 'sawing at the wheel is counted: ' .. busy.steerReversals)
+end)
+test('the coaching stage decides what comes first', function()
+  local function fresh(tier)
+    local lesson = Lesson.new(3, LC)
+    lesson.tier, lesson.allowPush = tier, true
+    return lesson
+  end
+  local lesson = fresh(1)
+  lesson:record(1, res('overSlow', 800, 10))
+  lesson:record(2, res('brakeEarly', 500, 30))
+  eq(lesson:choose().k, 2, 'a beginner: the brake point before the corner speed')
+  lesson.tier = 3
+  eq(lesson:choose().k, 1, 'an expert: simply the biggest loss')
+  lesson = fresh(1)
+  lesson:record(1, res('noTrail', 900, 20))
+  eq(lesson:choose().id, 'overSlow', 'nobody is taught trail braking on day one')
+  lesson = fresh(2)
+  for k = 1, 3 do
+    lesson:record(k, res('ok', 20))
+    lesson:settle(k, 20000, 20, true)
+  end
+  eq(lesson:choose(), nil, 'no hunting for the limit before the basics are in place')
+  lesson.tier = 3
+  eq(lesson:choose().id, 'push')
+  eq(Lesson.new(3, LC):stageTier(), 1, 'a driver with no clean laps yet starts at the first stage')
+end)
+
+-- Racing ----------------------------------------------------------------------
+
+print('racing')
+local Spotter = require('src/spotter')
+local Stint = require('src/stint')
+local Licence = require('src/licence')
+test('the spotter: alongside, three wide, clear, and traffic ahead', function()
+  local sp = Spotter.new(config.spotter)
+  local me = { x = 0, z = 0, lookX = 1, lookZ = 0, speedKmh = 150 }   -- pointing along +x; left is +z
+  local function run(others, seconds, leftSign)
+    local said, st = {}, nil
+    for _ = 1, math.floor(seconds * 60) do
+      local state, events = sp:update(me, others, #others, leftSign or 1, 1 / 60)
+      st = state
+      for _, ev in ipairs(events) do said[#said + 1] = ev.id end
+    end
+    return table.concat(said, ' '), st
+  end
+  local said, st = run({ { x = 1, z = 2.5 } }, 0.5)
+  eq(said, 'carLeft')
+  eq(st.left, true)
+  eq(st.traffic, true)
+  eq((run({ { x = 1, z = 2.5 } }, 1)), '', 'said once while it stays there')
+  eq((run({ { x = 1, z = 2.5 }, { x = -2, z = -2.2 } }, 0.5)), 'threeWide')
+  eq((run({ { x = 30, z = 2.5 } }, 1)), 'clear', 'both gone')
+  eq((run({ { x = 1, z = 2.5 } }, 0.5, -1)), 'carRight', 'the other handedness')
+  run({}, 1)
+  eq((run({ { x = 1, z = 2.5, inPit = true } }, 0.5)), '', 'cars in the pits are nobody')
+  eq((run({ { x = 2, z = 0.4 } }, 0.5)), '', 'nose to tail is not alongside')
+  local _, ahead = run({ { x = 18, z = 0.5 } }, 0.2)
+  eq(ahead.traffic, true, 'but a car just ahead is traffic')
+  local _, far = run({ { x = 60, z = 0 } }, 0.2)
+  eq(far.traffic, false)
+  me.speedKmh = 10
+  eq((run({ { x = 1, z = 2.5 } }, 0.5)), '', 'not at walking pace')
+end)
+test('the stint coach counts laps in the window and marks the milestones', function()
+  local st = Stint.new(config.stint)
+  local best = 100000
+  local r
+  for i = 1, 2 do r = st:lap(100500, true, best) end
+  eq(r.inWindow, true)
+  eq(r.streak, 2)
+  eq(r.milestone, nil)
+  eq(st:nextGoal(), 3)
+  r = st:lap(101000, true, best)
+  eq(r.milestone, 3)
+  r = st:lap(101300, true, best)                       -- 1.3% off: outside
+  eq(r.inWindow, false)
+  eq(r.broke, 3)
+  eq(st.streak, 0)
+  eq(st.clean, 4, 'still clean, just slow')
+  r = st:lap(100200, false, best)                      -- fast but with four wheels off
+  eq(r.inWindow, false)
+  eq(st.clean, 0)
+  for _ = 1, 5 do r = st:lap(100100, true, best) end
+  eq(r.milestone, 5)
+  eq(st.bestStreak, 5)
+  st:pit()
+  eq(st.streak, 0)
+  eq(st.bestStreak, 5, 'the best run is remembered')
+end)
+test('the licence ladder asks for pace and for repeating it', function()
+  local grades = config.licence.grades
+  eq(Licence.evaluate({}, grades).id, 'none')
+  local d = Licence.evaluate({ cleanStreak = 3 }, grades)
+  eq(d.id, 'd')
+  eq(d.next.id, 'c')
+  local quick = Licence.evaluate({ cleanStreak = 4, windowStreak = 2, paceRatio = 1.004, stepsDone = 5 }, grades)
+  eq(quick.id, 'd', 'fast but unable to repeat it: no higher licence')
+  local reqs = {}
+  for _, r in ipairs(quick.next.reqs) do reqs[r.key] = r end
+  eq(reqs.clean.done, false)
+  eq(reqs.pace.done, true)
+  eq(Licence.evaluate({ cleanStreak = 30, windowStreak = 30, stepsDone = 5 }, grades).id, 'd', 'steady but with nothing to measure pace against')
+  eq(Licence.evaluate({ cleanStreak = 12, windowStreak = 6, paceRatio = 1.028, stepsDone = 4 }, grades).id, 'b')
+  eq(Licence.evaluate({ cleanStreak = 25, windowStreak = 12, paceRatio = 1.012, stepsDone = 5 }, grades).id, 'a')
+  local pro = Licence.evaluate({ cleanStreak = 25, windowStreak = 22, paceRatio = 1.004, stepsDone = 5 }, grades)
+  eq(pro.id, 'pro')
+  eq(pro.next, nil)
+end)
+
 -- Updater -----------------------------------------------------------------------
 
 local Updater = require('src/updater')

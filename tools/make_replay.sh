@@ -2,6 +2,7 @@
 # Builds the browser replay: one self-contained HTML page showing a simulated
 # coaching session with the app's real HUD output and voice clips.
 #   tools/make_replay.sh [out.html] [laps]
+#   tools/make_replay.sh out.html --session <file.session.txt> [--combo <file.txt>]   # a real session
 # Needs luajit, ffmpeg and python3. The game does not need any of this.
 
 set -euo pipefail
@@ -11,7 +12,12 @@ LAPS="${2:-20}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-luajit tools/make_replay.lua "$TMP/replay.json" "$LAPS"
+if [ "${2:-}" = "--session" ]; then
+  shift
+  luajit tools/make_replay.lua "$TMP/replay.json" "$@"
+else
+  luajit tools/make_replay.lua "$TMP/replay.json" "$LAPS"
+fi
 
 # The voice clips as small MP3s, so the page can speak.
 mkdir -p "$TMP/mp3"

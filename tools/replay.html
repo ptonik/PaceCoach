@@ -116,7 +116,7 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-c
 <main class="wrap">
   <header>
     <h1>PaceCoach <span>replay</span></h1>
-    <p class="lede">A simulated learner drives twenty laps while the real PaceCoach code coaches them: one corner at a time up to the teacher's pace, then past it towards what the car can really do. The overlay and every spoken line are the app's own output.</p>
+    <p class="lede" id="lede">A simulated learner drives twenty laps while the real PaceCoach code coaches them: one corner at a time up to the teacher's pace, then past it towards what the car can really do. The overlay and every spoken line are the app's own output.</p>
   </header>
 
   <section class="monitor" aria-label="Replay">
@@ -157,15 +157,15 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-c
   <section class="notes">
     <div>
       <h2>The driver</h2>
-      <p>A <strong>simulation</strong>, not a person: a learner who brakes far too early for the hairpin, creeps through turn 2, takes the wrong side of the road into the chicane and coasts out of turn 6. After each lap they do what the coach asked in the focus corner, and nothing else. Once nothing is being lost, the coach says "find the limit" and they use a little more of the car there.</p>
+      <p id="note-driver">A <strong>simulation</strong>, not a person: a learner who brakes far too early for the hairpin, creeps through turn 2, takes the wrong side of the road into the chicane and coasts out of turn 6. After each lap they do what the coach asked in the focus corner, and nothing else. Once nothing is being lost, the coach says "find the limit" and they use a little more of the car there.</p>
     </div>
     <div>
       <h2>The coach</h2>
-      <p>The <strong>actual app code</strong>, version <span id="version"></span>, running outside the game against a stand-in for it. Each drawing call the HUD made was recorded as it happened and is replayed here; the voice clips are the ones the game plays.</p>
+      <p id="note-coach">The <strong>actual app code</strong>, version <span id="version"></span>, running outside the game against a stand-in for it. Each drawing call the HUD made was recorded as it happened and is replayed here; the voice clips are the ones the game plays.</p>
     </div>
     <div>
       <h2>What it is not</h2>
-      <p>Game footage, or proof about a human driver. The track is a 1.9 km test circuit made for the app's automated tests, and fonts differ from the game's. Red on the line is where the teacher brakes, green where it is flat out.</p>
+      <p id="note-not">Game footage, or proof about a human driver. The track is a 1.9 km test circuit made for the app's automated tests, and fonts differ from the game's. Red on the line is where the teacher brakes, green where it is flat out.</p>
     </div>
   </section>
 </main>
@@ -400,8 +400,8 @@ const AUDIO = /*AUDIO*/null;
       tr.children[0].textContent = name; tr.children[1].textContent = lapTime(ms); tr.children[4].textContent = note;
       body.append(tr);
     };
-    fixedRow('Teacher', R.teacherMs, 'The first benchmark: an opponent in the same car');
-    fixedRow('The car', R.carMs, 'What this simulated car can really do. The simulation knows it; the app does not.');
+    fixedRow(R.refName || 'Teacher', R.teacherMs, R.refName === 'Your best' ? 'The fastest lap in this session' : 'The benchmark: an opponent in the same car');
+    if (R.carMs) fixedRow('The car', R.carMs, 'What this simulated car can really do. The simulation knows it; the app does not.');
     for (const lap of R.laps) {
       const tr = document.createElement('tr'); tr.dataset.lap = lap.n;
       const gap = lap.ms - R.teacherMs;
@@ -462,6 +462,12 @@ const AUDIO = /*AUDIO*/null;
     $('sound').textContent = voice ? 'Voice on' : 'Voice off';
   });
   $('scrub').addEventListener('input', () => { seek($('scrub').value / 1000 * END); });
+  if (R.mode === 'real') {
+    $('lede').textContent = 'The last laps of a real session, replayed with what PaceCoach makes of them. The overlay and every spoken line are the app\u2019s own output for these laps.';
+    $('note-driver').textContent = 'A real session: the laps come from the file the app wrote on the gaming PC, sixty samples a second of position, speed, pedals and steering.';
+    $('note-coach').innerHTML = 'The <strong>actual app code</strong>, version <span id="version"></span>, run over those laps again outside the game. It shows what this version says about them, which can differ from what was heard in the car.';
+    $('note-not').textContent = 'Game footage. Lock-ups, slides and track limits are not in the lap file, so tips about those are missing. The track is drawn from the line of the benchmark lap.';
+  }
   $('version').textContent = R.version;
   buildLadder();
   seekSays();

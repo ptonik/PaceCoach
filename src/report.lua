@@ -34,10 +34,13 @@ function Report.build(d)
   end
   if d.limitMs then add('Limit lap (estimate): ' .. U.formatLap(d.limitMs)) end
   if d.level then add(string.format('Pace level: %s, %.1f%% of the limit lap', d.level.name, d.level.ratio * 100)) end
+  if d.licence then add('Licence: ' .. d.licence) end
+  if d.stint then add(d.stint) end
 
   if d.focus then
     add()
-    add(string.format('Working on: %s. %s (%d tries)', d.focus.corner, d.focus.text or '', d.focus.tries or 0))
+    local tries = d.focus.tries or 0
+    add(string.format('Working on: %s. %s (%d %s)', d.focus.corner, d.focus.text or '', tries, tries == 1 and 'try' or 'tries'))
   end
   if d.fixed and #d.fixed > 0 then
     add()

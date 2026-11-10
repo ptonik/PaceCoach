@@ -27,6 +27,9 @@ Settings.defaults = {
   lessons = true,       -- pick a focus corner and remind you of it
   praise = true,        -- say so when a corner goes well
   paceBar = true,       -- speed against the benchmark, right now
+  spotter = true,       -- call cars alongside: "car left", "clear"
+  sharedLaps = true,    -- download a shared fast lap for this car and track, if one exists
+  sessionLog = true,    -- keep the last laps of the session on disk for the replay
   autoCheck = true,     -- look for a new version when the app starts
   autoInstall = true,   -- download and install it without asking
 }

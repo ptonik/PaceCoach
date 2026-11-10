@@ -15,8 +15,37 @@ local S = require('src/strings')
 local U = require('src/util')
 local realIo = io
 
+-- With lap files from a real session instead:
+--   luajit tools/make_replay.lua out.json --session <file.session.txt> [--combo <file.txt>]
 local target = arg and arg[1] or 'replay.json'
 local wantLaps = tonumber(arg and arg[2]) or 20
+local sessionFile, comboFile
+for i = 2, #(arg or {}) do
+  if arg[i] == '--session' then sessionFile = arg[i + 1] end
+  if arg[i] == '--combo' then comboFile = arg[i + 1] end
+end
+local function slurp(path)
+  local f = path and realIo.open(path, 'rb')
+  if not f then return nil end
+  local text = f:read('*a')
+  f:close()
+  return text
+end
+
+local config = require('src/config')
+local Track = require('src/track')
+local Synth = require('synth')
+local world, runOpts, real
+if sessionFile then
+  local why
+  real, why = dofile(root .. '/tools/real_laps.lua').load(assert(slurp(sessionFile), 'cannot read ' .. sessionFile), slurp(comboFile))
+  assert(real, why)
+  world = real.world
+  runOpts = { world = world, store = real.store, samples = real.samples, fake = real.fake }
+else
+  world = Track.build((Synth.line(Synth.rectangle(), 1000)), { cfg = config.track, leftSign = 1 })
+  runOpts = { world = world, laps = wantLaps }
+end
 local EVERY = 4                       -- keep one frame in four: 15 per second
 
 -- What each clip says, for the captions (the same words tools/make_voice.sh speaks).
@@ -116,12 +145,13 @@ end
 
 local frames, says, lapRows = {}, {}, {}
 local hooked, count, playsSeen = false, 0, 0
-local teacher, world
+local teacher
 local clock = 0
 local lapStart = { [1] = 0 }
 
-local function ghostAt(track, lapTimeMs)
+local function ghostAt(lapTimeMs)
   -- Where the teacher was at this lap time: binary search in its time trace.
+  local track = world
   local t, n = teacher.t, teacher.n
   if lapTimeMs >= teacher.timeMs then return track.points[1].x, track.points[1].z end
   local lo, hi = 1, n
@@ -134,9 +164,7 @@ local function ghostAt(track, lapTimeMs)
 end
 
 local app, state, laps
-app, state, laps, world = Story.run({
-  laps = wantLaps,
-  onFrame = function(a, st, s, lapIndex)
+runOpts.onFrame = function(a, st, s, lapIndex)
     if not hooked then
       hooked = true
       hook()
@@ -145,8 +173,8 @@ app, state, laps, world = Story.run({
     st.window.x, st.window.y = 460, 310
     teacher = teacher or a.teacherLap
     lapStart[lapIndex] = lapStart[lapIndex] or clock
-  end,
-  afterDraw = function(a, st, s, lapIndex)
+  end
+runOpts.afterDraw = function(a, st, s, lapIndex)
     count = count + 1
     clock = clock + s.dt
     for i = playsSeen + 1, #st.plays do
@@ -154,23 +182,24 @@ app, state, laps, world = Story.run({
     end
     playsSeen = #st.plays
     if count % EVERY ~= 0 or not a.track then return end
-    local track = a.track
-    local n = track.n
-    local cell = (math.floor(s.pos * n) % n) + 1
-    local p0, p1 = track.points[cell], track.points[(cell % n) + 1]
+    -- Everything the scene needs is worked out on the stand-in's own map.
+    local n = world.n
+    local f = s.pos * n
+    local cell = (math.floor(f) % n) + 1
+    local p0, p1 = world.points[cell], world.points[(cell % n) + 1]
     local dx, dz = p1.x - p0.x, p1.z - p0.z
     local len = math.sqrt(dx * dx + dz * dz)
-    local off = s.offLeftM or 0
-    local x, z = s.x - dz / len * off, s.z + dx / len * off
+    local off, u = s.offLeftM or 0, f - math.floor(f)
+    local x, z = p0.x + dx * u - dz / len * off, p0.z + dz * u + dx / len * off
     local gx, gz = x, z
-    if teacher then gx, gz = ghostAt(track, s.t) end
+    if teacher then gx, gz = ghostAt(s.t) end
     local g = a.gauge
     frames[#frames + 1] = string.format('[%s,%d,%d,%s,%s,%.3f,%s,%s,%s,%.2f,%.2f,%s,%.2f,%.2f,%s,[%s]]',
       num(clock), lapIndex, U.round(s.t), num(x), num(z), math.atan2(dz, dx), num(gx), num(gz),
       num(s.v), s.gas, s.brake, num(g and g.vRef or s.v), g and g.refGas or 0, g and g.refBrake or 0,
       a.benchDeltaMs and tostring(U.round(a.benchDeltaMs)) or 'null', table.concat(current, ','))
-  end,
-  onLap = function(a, _, lapNumber, lapMs)
+  end
+runOpts.onLap = function(a, _, lapNumber, lapMs)
     local f = a.lesson.focus
     local c = f and a.track.corners[f.k]
     local lv = a.level
@@ -178,9 +207,12 @@ app, state, laps, world = Story.run({
       num(lapStart[lapNumber] or 0),
       f and str(c.name .. ': ' .. S.remedy[f.id].short) or 'null',
       str(S.benchmark[a.coachLabel] or '-'), lv and str(S.level[lv.id]) or 'null')
-  end,
-})
+  end
+app, state, laps = Story.run(runOpts)
 assert(not app.lastError, app.lastError)
+if not teacher then                      -- nothing to race against: the fastest lap stands in
+  teacher = app.best
+end
 
 -- Track geometry and the teacher's pedals along it, for the scene.
 local pts, zone = {}, {}
@@ -202,8 +234,10 @@ end
 
 local out = {
   '{"fps":', num(60 / EVERY), ',"version":', str(app.version), ',"lengthM":', num(world.lengthM),
+  ',"mode":', str(real and 'real' or 'sim'),
+  ',"refName":', str((app.teacherLap and 'Teacher') or 'Your best'),
   ',"teacherMs":', tostring(U.round(teacher.timeMs)),
-  ',"carMs":', tostring(U.round(Story.carLimitMs(world))),
+  ',"carMs":', real and 'null' or tostring(U.round(Story.carLimitMs(world))),
   ',"hud":[460,310]',
   ',"palette":[', table.concat(paletteList, ','), ']',
   ',"track":[', table.concat(pts, ','), ']',

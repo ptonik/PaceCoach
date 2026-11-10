@@ -112,8 +112,11 @@ function Story.run(opts)
     world = Track.build(points, { cfg = config.track, leftSign = 1 })
   end
   local store = opts.store or Story.storeWithTeacher(world)
+  if opts.samples then return Story.replay(world, store, opts) end
   Fake.unload()
-  local state = Fake.install({ track = world, appDir = root, store = store, web = opts.web })
+  local fakeOpts = { track = world, appDir = root, store = store, web = opts.web }
+  for key, value in pairs(opts.fake or {}) do fakeOpts[key] = value end
+  local state = Fake.install(fakeOpts)
   dofile(root .. '/PaceCoach.lua')
   local app = package.loaded['src/app']
   local flaws = opts.flaws or Story.flaws()
@@ -155,6 +158,37 @@ function Story.run(opts)
         Story.improve(flaws, focus.k, base, mode)
         plan = Synth.plan(world, base, flaws)
       end
+    end
+  end
+  return app, state, laps, world
+end
+
+-- Drives laps that were recorded earlier (see tools/real_laps.lua) through
+-- the app, with the same hooks as Story.run.
+function Story.replay(world, store, opts)
+  Fake.unload()
+  local fakeOpts = { track = world, appDir = root, store = store }
+  for key, value in pairs(opts.fake or {}) do fakeOpts[key] = value end
+  local state = Fake.install(fakeOpts)
+  dofile(root .. '/PaceCoach.lua')
+  local app = package.loaded['src/app']
+  local laps, lapsHeard = {}, 0
+  for frame, s in ipairs(opts.samples) do
+    local lapIndex = s.lapCount + 1
+    state.frame = frame
+    state.officialLapMs = s.prevLapMs or 0
+    Fake.drive(s)
+    script.update(s.dt)
+    if opts.onFrame then opts.onFrame(app, state, s, lapIndex) end
+    if opts.windows ~= false then
+      script.windowMain(s.dt)
+      if opts.afterDraw then opts.afterDraw(app, state, s, lapIndex) end
+    end
+    if app.lastError then error('app error at frame ' .. frame .. ': ' .. app.lastError) end
+    if app.lapNumber > lapsHeard then
+      lapsHeard = app.lapNumber
+      laps[lapsHeard] = app.laps[#app.laps].timeMs
+      if opts.onLap then opts.onLap(app, state, lapsHeard, laps[lapsHeard], {}) end
     end
   end
   return app, state, laps, world

@@ -31,6 +31,7 @@ end
 --   store      table used as the file system (path -> text), shared between sessions
 --   others     list of other cars: { { model = 'test_car', ai = true }, ... }
 --   renderThrows  true to make 3D drawing raise an error
+--   lengthM    what the game reports as the track length, if not the line's own
 function Fake.install(opts)
   opts = opts or {}
   local track = opts.track
@@ -96,7 +97,7 @@ function Fake.install(opts)
     state.others[i] = { car = c, wheels = w, model = o.model or 'test_car' }
   end
   local sim = strict('sim', keep('sim.', {
-    trackLengthM = track.lengthM, isPaused = false, isReplayActive = false,
+    trackLengthM = opts.lengthM or track.lengthM, isPaused = false, isReplayActive = false,
     carsCount = 1 + #state.others,
   }))
   state.sim = sim

@@ -22,7 +22,7 @@ return {
 
   gears = { 'R', 'N', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th' },
 
-  benchmark = { teacher = 'teacher', friend = 'friend', you = 'your best', own = 'your best', limit = 'limit lap' },
+  benchmark = { teacher = 'teacher', friend = 'friend', you = 'your best', own = 'your best', limit = 'limit lap', shared = 'shared lap' },
 
   -- Post-corner feedback. %d is filled with metres or speed.
   coach = {
@@ -36,13 +36,15 @@ return {
     gasLift = 'On the throttle too early: you had to lift again.',
     throttleLate = 'Back on the throttle %d m late.',
     coast = '%d m of coasting. Brake later, or get back on the power.',
+    busyHands = '%d steering corrections more than the benchmark. One turn in, one unwind.',
+    tooMuchLock = '%d%% more steering than this corner needs: the front tyres are scrubbing.',
     wide = '%d m wide of the line at the apex.',
     exitSlow = 'Slow exit: %s down. Straighten the wheel and squeeze the throttle.',
     slower = 'Slower through here, with no single cause.',
   },
 
   -- Who the live coach compares you with, as it reads in a sentence.
-  who = { teacher = 'the teacher', friend = 'your friend', you = 'your best lap', own = 'your best lap', limit = 'the limit lap' },
+  who = { teacher = 'the teacher', friend = 'your friend', you = 'your best lap', own = 'your best lap', limit = 'the limit lap', shared = 'the shared lap' },
 
   -- Live coaching: the word on the card, the clip that is spoken, the colour
   -- of the card and a one-line reason. %s is filled from `who`.
@@ -82,6 +84,8 @@ return {
     gasLift = { text = 'Wait for the exit, then one smooth squeeze of throttle.', short = 'be patient with the throttle', clip = 'tip_patience' },
     throttleLate = { text = 'Get back on the throttle sooner.', short = 'earlier on the throttle', clip = 'tip_throttle_earlier' },
     coast = { text = 'No coasting: brake later, then straight back to the throttle.', short = 'no coasting', clip = 'tip_no_coast' },
+    busyHands = { text = 'Smooth hands: one turn in, hold it, one unwind.', short = 'smooth hands', clip = 'tip_smooth' },
+    tooMuchLock = { text = 'Less steering: slow a touch more first, then turn only as much as the corner needs.', short = 'less steering', clip = 'tip_less_lock' },
     wide = { text = 'Get closer to the inside at the apex.', short = 'hit the apex', clip = 'tip_apex' },
     exitSlow = { text = 'Straighten the wheel and use full throttle on the way out.', short = 'full throttle on the exit', clip = 'tip_exit' },
   },
@@ -121,6 +125,8 @@ return {
     gasLift = { 'Going to the throttle early and lifting again is slower than waiting.', 'Wait until you can see the exit and can start to straighten the wheel.', 'Then squeeze once, all the way.' },
     throttleLate = { 'The moment the car is turned, start squeezing the throttle.', 'Open the steering as you add throttle: the two go together.' },
     coast = { 'There should always be a pedal down: brake, then throttle.', 'If you are rolling with neither, you braked too early. Brake later.' },
+    busyHands = { 'Look further ahead: at the apex before you turn, at the exit before you reach the apex.', 'Turn the wheel once, to the amount the corner needs, and wait.', 'Corrections come from arriving too fast or turning too late. Fix those and the hands go quiet.' },
+    tooMuchLock = { 'When the front slides, more steering makes it worse.', 'Arrive two or three km/h slower and turn less.', 'The car should follow the wheel at once. If it does not, you are asking too much.' },
     wide = { 'Start from the outside edge of the road.', 'Look at the inside kerb before you turn, and let the car run out to the far side on the exit.' },
     exitSlow = { 'Speed on the exit comes from a straight steering wheel.', 'A slightly later turn-in lets you straighten sooner and use full throttle earlier.' },
     steady = { 'Choose something you can see: a board, a kerb end, a mark on the road.', 'Brake there every lap, even when it feels early.', 'Only move it once you hit it three laps in a row.' },
@@ -128,11 +134,12 @@ return {
   },
 
   skills = {
-    order = { 'braking', 'speed', 'exits', 'line', 'consistency' },
+    order = { 'braking', 'speed', 'exits', 'line', 'hands', 'consistency' },
     braking = 'Braking points',
     speed = 'Corner speed',
     exits = 'Exits',
     line = 'Line',
+    hands = 'Smooth hands',
     consistency = 'Consistency',
   },
 
@@ -143,6 +150,14 @@ return {
     speed = { name = 'Carry the speed', line = '%d of %d corners within 5 km/h of the target' },
     exits = { name = 'Get on the power', line = '%d of %d exits on time and up to speed' },
     consistency = { name = 'Be consistent', line = '%d of %d laps within half a second' },
+  },
+
+  -- Coaching stage: what the coach puts first for this driver.
+  tier = {
+    title = 'Coaching stage %d of 3: %s',
+    { name = 'foundations', line = 'Staying on the track, brake points and the line come first. One cue per corner.' },
+    { name = 'technique', line = 'Corner speed, throttle timing, smooth hands and doing the same thing every lap.' },
+    { name = 'the limit', line = 'Trail braking, and going looking for grip once nothing is being lost.' },
   },
 
   -- Pace levels: your best lap against the limit lap.
@@ -156,6 +171,42 @@ return {
     next = 'Next: %s, %.2f s to find.',
     top = 'Top level: within half a percent of everything this car has shown so far. From here the coach sends you looking for more grip, one corner at a time, and the limit lap moves when you find it.',
     why = 'The limit lap is an estimate: the best grip seen from this car so far, used in every corner. It is not a world record; a lap file from a faster driver raises it.',
+  },
+
+  -- The spotter.
+  spot = {
+    carLeft = { text = 'CAR LEFT', clip = 'car_left' },
+    carRight = { text = 'CAR RIGHT', clip = 'car_right' },
+    threeWide = { text = 'THREE WIDE', clip = 'three_wide' },
+    clear = { text = 'CLEAR', clip = 'clear' },
+  },
+
+  -- The stint coach.
+  stint = {
+    inWindow = 'In the window: %d in a row.',
+    goal = ' Next mark: %d.',
+    out = '%s s outside the window.',
+    broke = 'That ends a run of %d.',
+    milestone = '%d laps in a row within %.1f%% of your best',
+    milestoneBody = { [3] = 'That is the start of race pace.', [5] = 'That is a safe opening stint.',
+      [10] = 'Ten in a row: that is how races are finished.', [20] = 'Twenty in a row. That is a full stint.' },
+    line = 'Stint: %d in the window in a row (best %d), %d clean in a row (best %d).',
+  },
+
+  -- The licence ladder.
+  licence = {
+    title = 'Licence',
+    none = 'No licence yet', d = 'D: track ready', c = 'C: club racer', b = 'B: racer',
+    a = 'A: endurance ready', pro = 'Pro',
+    holds = 'Licence: %s',
+    forNext = 'For %s:',
+    top = 'The top of the ladder for this car and track.',
+    clean = '%d of %d clean laps in a row',
+    steps = '%d of %d training steps done',
+    pace = 'best lap within %.1f%% of the limit lap (now %s)',
+    window = '%d of %d laps in a row in the window',
+    up = 'Licence: %s',
+    why = 'A licence is for this car on this track. It asks for pace and for doing it again and again without a mistake, because a race asks for both.',
   },
 
   update = {
@@ -191,6 +242,8 @@ return {
     teacherReady = 'Teacher lap recorded',
     teacherBody = 'Brake points, gears and corner speeds now come from this lap.',
     teacherDerived = ' Its pedals were worked out from its speed, because the game did not provide them.',
+    sharedReady = 'Shared lap downloaded',
+    sharedBody = 'Somebody quick has driven this car here. Their lap is now part of what you are measured against.',
     teacherBeaten = 'You beat the teacher. From here the coach works against the limit lap: the best grip this car has shown, used everywhere.',
   },
 

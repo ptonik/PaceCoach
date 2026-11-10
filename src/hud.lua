@@ -126,6 +126,11 @@ local function cornerCard(app, W, s)
     end
   end
 
+  -- The spotter: a red edge on the side where a car is alongside.
+  local spot = app.spot
+  if spot and spot.left then G.rect(0, 0, 9 * s, h, C.red, 4 * s) end
+  if spot and spot.right then G.rect(W - 9 * s, 0, W, h, C.red, 4 * s) end
+
   -- Countdown bar to the brake point, with the distance written beside it.
   local bx0, bx1, by = x, right - 126 * s, 88 * s
   G.rect(bx0, by, bx1, by + 10 * s, C.barBg, 5 * s)

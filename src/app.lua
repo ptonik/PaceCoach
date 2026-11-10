@@ -19,6 +19,9 @@ local Lesson = require('src/lesson')
 local Updater = require('src/updater')
 local Limit = require('src/limit')
 local Report = require('src/report')
+local Spotter = require('src/spotter')
+local Stint = require('src/stint')
+local Licence = require('src/licence')
 local Sim = require('src/sim')
 local Settings = require('src/settings')
 local Voice = require('src/voice')
@@ -46,6 +49,7 @@ local App = {
 
 local rs, ms, ts, other = {}, {}, {}, {}   -- reusable sample tables
 local popts, mopts, liveIn = {}, {}, {}
+local traffic = {}                          -- reusable: where the other cars are
 
 -- Errors --------------------------------------------------------------------
 
@@ -104,12 +108,20 @@ local function remedyText(id, value)
 end
 App.remedyText = remedyText
 
+-- The coaching stage: 1 foundations, 2 technique, 3 the limit. From the pace
+-- level when there is one, otherwise from the training steps.
+local function coachingTier()
+  local level = App.level
+  if level then return (level.index <= 2 and 1) or (level.index <= 4 and 2) or 3 end
+  return App.lesson and App.lesson:stageTier() or 1
+end
+
 -- Benchmark -----------------------------------------------------------------
 
 -- Decides which lap guides the brake cue and the corner targets, and which
 -- lap the post-corner feedback compares against.
 local function refreshBenchmark()
-  local lap, label = Teacher.choose(App.teacherLap, App.importLap, App.best)
+  local lap, label = Teacher.choose(App.teacherLap, App.importLap, App.best, App.importLabel)
   App.benchmark, App.benchLabel = lap, label
   if App.state ~= 'ready' then return end
 
@@ -155,6 +167,41 @@ local function refreshBenchmark()
     App.lesson:rebase()
   end
   App.lesson.allowPush = App.coachPlan ~= nil
+  App.tier = coachingTier()
+  App.lesson.tier = App.tier
+end
+
+-- A lap from outside: a friend's file, or one shared through the repository.
+-- The faster of the two counts.
+function App.pickImport()
+  local lap, label = App.friendLap, 'friend'
+  if App.sharedLap and (not lap or App.sharedLap.timeMs < lap.timeMs) then lap, label = App.sharedLap, 'shared' end
+  App.importLap, App.importLabel = lap, lap and label or nil
+end
+
+-- What the licence ladder looks at: the best this driver has shown with
+-- this car on this track, in this session or an earlier one.
+function App.licenceStats()
+  local stats = { cleanStreak = 0, windowStreak = 0, stepsDone = 0 }
+  for _, entry in ipairs(App.history) do
+    stats.cleanStreak = math.max(stats.cleanStreak, entry.clean or 0)
+    stats.windowStreak = math.max(stats.windowStreak, entry.window or 0)
+    stats.stepsDone = math.max(stats.stepsDone, entry.steps or 0)
+    if entry.pace and (not stats.paceRatio or entry.pace / 1000 < stats.paceRatio) then stats.paceRatio = entry.pace / 1000 end
+  end
+  if App.stint then
+    stats.cleanStreak = math.max(stats.cleanStreak, App.stint.bestClean)
+    stats.windowStreak = math.max(stats.windowStreak, App.stint.bestStreak)
+  end
+  if App.lesson then
+    local done = 0
+    for _, st in ipairs(App.lesson:stages()) do
+      if st.done then done = done + 1 end
+    end
+    stats.stepsDone = math.max(stats.stepsDone, done)
+  end
+  if App.level and (not stats.paceRatio or App.level.ratio < stats.paceRatio) then stats.paceRatio = App.level.ratio end
+  return stats
 end
 
 -- Start-up ------------------------------------------------------------------
@@ -214,11 +261,17 @@ local function init()
   App.data = App.reference:loadCombo(App.trackId, App.carId, App.n)
   App.best = App.data.laps.best
   App.teacherLap = App.data.laps.teacher
-  App.importLap = App.reference:loadImport(App.trackId, App.carId, App.n)
+  App.friendLap = App.reference:loadImport(App.trackId, App.carId, App.n)
+  App.sharedLap = App.reference:loadShared(App.trackId, App.carId, App.n)
+  App.pickImport()
   App.teacher = Teacher.new(App.n, config.lap, config.teacher)
   App.teacher.best = App.teacherLap                 -- only a faster lap replaces a saved one
   App.grip = Grip.new(config.grip, App.reference:loadGrip(App.carId))
   App.history = App.reference:loadHistory(App.trackId, App.carId)
+  App.spotter = Spotter.new(config.spotter)
+  App.stint = Stint.new(config.stint)
+  App.licence = Licence.evaluate(App.licenceStats(), config.licence.grades)
+  App.licenceIdx = App.licence.index
   App.updater = Updater.new({
     get = Sim.httpGet, save = Sim.saveFile, load = Sim.loadFile, mkdir = Sim.makeDir,
     base = config.update.base, list = config.update.manifest,
@@ -257,11 +310,11 @@ end
 
 -- What the coach says at the end of a lap: where the most time went, and
 -- the one thing to work on next.
-local function lessonLine(sum)
+local function lessonLine(sum, brief)
   if not (sum and App.track and App.coachPlan and App.settings.lessons) then return nil end
   local corners = App.track.corners
   local parts = {}
-  if sum.worstK and sum.worstMs and sum.worstMs >= config.lesson.minFocusMs then
+  if not brief and sum.worstK and sum.worstMs and sum.worstMs >= config.lesson.minFocusMs then
     parts[#parts + 1] = string.format(S.lesson.lapWorst, corners[sum.worstK].name, U.formatDelta(sum.worstMs))
   end
   local f = sum.focus
@@ -286,6 +339,10 @@ function App.reportData()
     skills = {}, stages = {}, fixed = {}, corners = {}, said = {}, mistakes = {}, missing = {},
   }
   if App.level then d.level = { name = S.level[App.level.id], ratio = App.level.ratio } end
+  if App.licence then d.licence = S.licence[App.licence.id] end
+  if App.stint then
+    d.stint = string.format(S.stint.line, App.stint.streak, App.stint.bestStreak, App.stint.clean, App.stint.bestClean)
+  end
   if lesson then
     local skills = lesson:skills()
     for _, id in ipairs(S.skills.order) do d.skills[#d.skills + 1] = { name = S.skills[id], value = skills[id] } end
@@ -304,7 +361,8 @@ function App.reportData()
       d.corners[#d.corners + 1] = {
         name = corners[row.k] and corners[row.k].name or '?', typicalMs = row.typicalMs,
         cause = row.id and S.remedy[row.id] and S.remedy[row.id].short or nil,
-        lastMs = row.lastMs, bestMs = row.bestMs, passes = row.passes, steadyM = row.steady and row.steady.brakeM or nil,
+        lastMs = row.lastMs, bestMs = row.bestMs, passes = row.passes,
+        steadyM = row.steady and row.steady.brakeM >= config.lesson.steadyBrakeM and row.steady.brakeM or nil,
       }
     end
   end
@@ -320,6 +378,17 @@ function App.reportData()
   return d
 end
 
+-- Keeps the last few laps of this session on disk, so they can be replayed
+-- and looked at afterwards. Each lap is turned into text once.
+function App.logLap(lap)
+  App.logChunks = App.logChunks or {}
+  local chunks = App.logChunks
+  chunks[#chunks + 1] = Reference.encodeLap(string.format('lap%03d', App.lapNumber), lap)
+  while #chunks > config.lap.logKeep do table.remove(chunks, 1) end
+  App.reference:saveSession({ track = App.trackId, car = App.carId, n = App.n,
+    left = App.track and App.track.leftSign or 1 }, chunks)
+end
+
 -- Keeps one line of numbers per session, so progress shows across days.
 local function saveHistory()
   if not App.lesson then return end
@@ -333,6 +402,12 @@ local function saveHistory()
   entry.laps, entry.valid = App.lapNumber, App.validLaps or 0
   entry.best = App.sessionBestMs
   entry.pace = App.level and (App.level.ratio * 1000) or nil
+  entry.window, entry.clean = App.stint.bestStreak, App.stint.bestClean
+  local steps = 0
+  for _, st in ipairs(App.lesson:stages()) do
+    if st.done then steps = steps + 1 end
+  end
+  entry.steps = steps
   entry.bench = App.benchmark and App.benchmark.timeMs or nil
   App.reference:saveHistory(App.trackId, App.carId, App.history, config.lesson.historyKeep)
   App.reportSaved = App.reference:saveReport(App.trackId, App.carId, Report.build(App.reportData()))
@@ -357,8 +432,44 @@ local function finishLap(lap, s)
     App.validLaps = (App.validLaps or 0) + 1
     if not App.sessionBestMs or lap.timeMs < App.sessionBestMs then App.sessionBestMs = lap.timeMs end
   end
-  local advice = App.lesson and lessonLine(App.lesson:lapDone(lap.timeMs, lap.valid)) or nil
-  local function withAdvice(body) return advice and (body .. ' ' .. advice) or body end
+  if App.lesson then
+    App.tier = coachingTier()
+    App.lesson.tier = App.tier
+  end
+  if App.settings.sessionLog then guard('session log', App.logLap, lap) end
+  local lessonSum = App.lesson and App.lesson:lapDone(lap.timeMs, lap.valid) or nil
+
+  -- The stint: how many laps in a row have been close to the best one.
+  local bestMs = App.best and App.best.timeMs or nil
+  if lap.valid and (not bestMs or lap.timeMs < bestMs) then bestMs = lap.timeMs end
+  local stint = App.stint:lap(lap.timeMs, lap.valid, bestMs)
+  App.stintLast = stint
+  local racing
+  if stint.milestone then
+    racing = string.format('%d laps in a row in the window.', stint.milestone)
+  elseif stint.broke then
+    racing = string.format(S.stint.broke, stint.broke)
+  elseif stint.inWindow and stint.streak >= 2 then
+    racing = string.format(S.stint.inWindow, stint.streak)
+  end
+  if App.level then App.levelNow = App.level end
+  local licence = Licence.evaluate(App.licenceStats(), config.licence.grades)
+  local licenceUp = licence.index > (App.licenceIdx or 1)
+  App.licence, App.licenceIdx = licence, math.max(App.licenceIdx or 1, licence.index)
+  if licenceUp then
+    racing = string.format(S.licence.up, S.licence[licence.id]) .. '.' .. (racing and (' ' .. racing) or '')
+  end
+  -- One note has to carry all of this at speed: when there is racing news,
+  -- the lesson part shrinks to the one thing to do next.
+  local advice = lessonLine(lessonSum, racing ~= nil)
+  local function withAdvice(body)
+    if racing then body = racing .. ' ' .. body end
+    return advice and (body .. ' ' .. advice) or body
+  end
+  if App.settings.voice and App.settings.praise then
+    if stint.milestone then Voice.say('streak_' .. stint.milestone, App.settings.voiceVolume, false, 6) end
+    if licenceUp then Voice.say('licence_up', App.settings.voiceVolume, false, 8) end
+  end
   guard('history', saveHistory)
 
   local time = U.formatLap(lap.timeMs)
@@ -449,6 +560,9 @@ end
 local function coachText(res, mph)
   local template = S.coach[res.id]
   if not template then return nil end
+  if res.id == 'busyHands' or res.id == 'tooMuchLock' then
+    return string.format(template, U.round(res.value or 0))
+  end
   if res.id == 'overSlow' or res.id == 'exitSlow' then
     local speed = mph and string.format('%d mph', U.round(res.value * 0.621371))
       or string.format('%d km/h', U.round(res.value))
@@ -474,14 +588,22 @@ local function judgeCorner(k)
   local got = Metrics.measure(sl, App.track, c, seg, config.metrics)
   local left = Metrics.lateral(sl, refSlice, ref.minJ, App.track.leftSign)
   local wide = (c.dir == 'left') and -left or left      -- outside of a left-hander is the right
-  local res = Coach.judge(ref, got, { wideM = wide, offTrack = offTrack }, config.coach)
+  local gamepad = App.settings.gamepad == true
+  local res = Coach.judge(ref, got, { wideM = wide, offTrack = offTrack, gamepad = gamepad }, config.coach)
   res.corner, res.at = c, App.clock
   res.text = coachText(res, App.settings.mph)
   App.cornerResults[k] = res
   App.lastPass = App.lastPass or {}
   App.lastPass[k] = sl                       -- for the speed trace in the panel
+  if App.trafficInSeg then
+    -- A corner taken in traffic says nothing about how you drive it alone:
+    -- it is left out of the lesson plan, and nobody is told off for it.
+    res.traffic = true
+    return
+  end
 
-  local verdict = App.lesson:record(k, res, Coach.detail(ref, got, { wideM = wide, offTrack = offTrack }))
+  local verdict = App.lesson:record(k, res,
+    Coach.detail(ref, got, { wideM = wide, offTrack = offTrack, gamepad = gamepad }))
   res.verdict = verdict
   local say = App.settings.voice and App.settings.praise
   local vol = App.settings.voiceVolume
@@ -543,7 +665,7 @@ end
 local function settleCorner(k)
   local plan, res = App.coachPlan, App.cornerResults[k]
   local ref = plan.targets[k]
-  if not (res and ref) then return end
+  if not (res and ref) or res.traffic then return end
   local sl = Metrics.slice(App.track, App.recorder.lap, App.recorder.prev, App.segs[k])
   if not sl then return end
   res.lossMs = sl.timeMs - ref.timeMs
@@ -603,6 +725,26 @@ local function frame(dt)
   rs.v, rs.gas, rs.brake, rs.steer = s.speedKmh, s.gas, s.brake, s.steer or 0
   rs.gear, rs.x, rs.z = s.gear, s.x, s.z
   local done = App.recorder:feed(rs)
+  if inPits and not App.wasInPits then App.stint:pit() end
+  App.wasInPits = inPits
+
+  -- The spotter: cars alongside, and traffic close ahead.
+  App.spot = nil
+  if App.settings.spotter and App.track and s.lookX and not inPits then
+    local count = Sim.readTraffic(traffic, config.spotter.maxCars)
+    if count > 0 then
+      local spot, calls = App.spotter:update(s, traffic, count, App.track.leftSign, dt)
+      App.spot = spot
+      if spot.traffic then App.trafficInSeg = true end
+      for _, ev in ipairs(calls) do
+        local def = S.spot[ev.id]
+        if App.settings.voice then
+          Voice.say(def.clip, App.settings.voiceVolume, ev.id ~= 'clear', 1)
+        end
+      end
+    end
+  end
+
   if inPits then
     App.recorder:invalidate('pit')
   elseif s.wheelsOut > config.lap.maxWheelsOut then
@@ -708,9 +850,10 @@ local function frame(dt)
     li.cell, li.pos, li.v, li.gas, li.brake = cell, s.pos, s.speedKmh, s.gas, s.brake
     li.x, li.z = s.x, s.z
     li.busy = busy or inPits or not driving or App.settings.liveCoach ~= true
+      or (App.spot ~= nil and App.spot.traffic)
     li.pilotCue = App.card and App.card.cue or nil
     li.turnCue, li.lineCue = App.settings.turnCue, App.settings.lineCue
-    li.maxPerCorner = App.settings.beginner and 2 or config.live.maxPerCorner
+    li.maxPerCorner = math.min(App.settings.beginner and 2 or config.live.maxPerCorner, App.tier or 1)
     local gauge, said = App.live:update(li, dt)
     App.gauge = gauge
     for _, ev in ipairs(said) do
@@ -732,7 +875,7 @@ local function frame(dt)
         if not App.exitJudged then judgeCorner(was) end
         settleCorner(was)
       end
-      App.segIdx, App.exitJudged, App.offInSeg = k, false, false
+      App.segIdx, App.exitJudged, App.offInSeg, App.trafficInSeg = k, false, false, false
     end
     local es = k and App.coachPlan.exitSegs[k]
     if es and driving and was == k and not App.exitJudged
@@ -777,6 +920,25 @@ local function frame(dt)
   end
 end
 
+-- Shared laps -----------------------------------------------------------------
+
+-- Asks the repository for a fast lap of this car on this track. Most
+-- combinations have none, and that is fine.
+function App.fetchSharedLap()
+  local name = U.safeName(App.trackId) .. '__' .. U.safeName(App.carId) .. '.txt'
+  Sim.httpGet(config.update.base .. config.update.laps .. name, function(err, status, body)
+    if err or status ~= 200 or type(body) ~= 'string' then return end
+    local lap = Reference.fastest(body, App.n, 'shared')
+    if not lap or (App.sharedLap and App.sharedLap.timeMs <= lap.timeMs) then return end
+    App.sharedLap = lap
+    Sim.saveFile(App.reference:sharedPath(App.trackId, App.carId), body)
+    App.pickImport()
+    refreshBenchmark()
+    showTip({ title = S.status.sharedReady .. '  ' .. U.formatLap(lap.timeMs), body = S.status.sharedBody,
+      good = true, rank = 35 }, 7)
+  end)
+end
+
 -- Updates -------------------------------------------------------------------
 
 -- Looks for a new version once, a few seconds after start-up, and tells the
@@ -787,6 +949,7 @@ local function watchUpdate()
   if not App.updateAsked and App.clock >= config.update.checkAfterS then
     App.updateAsked = true
     if App.settings.autoCheck and Sim.has['web.get'] then u:check() end
+    if App.settings.sharedLaps and App.trackId then App.fetchSharedLap() end
   end
   u:pump()
   if u.state == 'ready' then
